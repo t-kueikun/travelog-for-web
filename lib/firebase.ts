@@ -1,6 +1,6 @@
-import { getApp, getApps, initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getApp, getApps, initializeApp, type FirebaseApp } from "firebase/app";
+import { getAuth, type Auth } from "firebase/auth";
+import { getFirestore, type Firestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -11,7 +11,36 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
 };
 
-const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+let app: FirebaseApp | null = null;
+let auth: Auth | null = null;
+let db: Firestore | null = null;
 
-export const auth = getAuth(app);
-export const db = getFirestore(app);
+function ensureBrowser() {
+  if (typeof window === "undefined") {
+    throw new Error("Firebase is only available in the browser runtime.");
+  }
+}
+
+export function getFirebaseApp() {
+  ensureBrowser();
+  if (!app) {
+    app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+  }
+  return app;
+}
+
+export function getFirebaseAuth() {
+  ensureBrowser();
+  if (!auth) {
+    auth = getAuth(getFirebaseApp());
+  }
+  return auth;
+}
+
+export function getFirebaseDb() {
+  ensureBrowser();
+  if (!db) {
+    db = getFirestore(getFirebaseApp());
+  }
+  return db;
+}

@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import { createContext, useContext, useEffect, useState } from "react";
 import { getRedirectResult, onAuthStateChanged, type User } from "firebase/auth";
-import { auth } from "@/lib/firebase";
+import { getFirebaseAuth } from "@/lib/firebase";
 
 type AuthContextValue = {
   user: User | null;
@@ -20,6 +20,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
+
+    let auth;
+    try {
+      auth = getFirebaseAuth();
+    } catch (err) {
+      setError("Firebaseの初期化に失敗しました。");
+      setLoading(false);
+      console.error(err);
+      return () => {
+        active = false;
+      };
+    }
 
     getRedirectResult(auth).catch((err) => {
       if (!active) {

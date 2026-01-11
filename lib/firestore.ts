@@ -15,7 +15,7 @@ import {
   writeBatch
 } from "firebase/firestore";
 import type { Timestamp } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { getFirebaseDb } from "@/lib/firebase";
 
 export type TravelPlan = {
   id: string;
@@ -96,6 +96,7 @@ function mapPlan(snapshot: {
 }
 
 export async function getMyPlans(userId: string): Promise<TravelPlan[]> {
+  const db = getFirebaseDb();
   const sources = [
     collection(db, "Users", userId, "travelPlans"),
     collection(db, "users", userId, "travelPlans"),
@@ -129,6 +130,7 @@ export async function getMyPlans(userId: string): Promise<TravelPlan[]> {
 }
 
 export async function getPublicPlans(): Promise<TravelPlan[]> {
+  const db = getFirebaseDb();
   const ref = collectionGroup(db, "travelPlans");
   const q = query(ref, where("isPublic", "==", true));
   const snapshot = await getDocs(q);
@@ -136,6 +138,7 @@ export async function getPublicPlans(): Promise<TravelPlan[]> {
 }
 
 export async function getPlanByPath(planPath: string): Promise<TravelPlan | null> {
+  const db = getFirebaseDb();
   const ref = doc(db, planPath);
   const snapshot = await getDoc(ref);
   if (!snapshot.exists()) {
@@ -169,6 +172,7 @@ export function subscribeComments(
   onUpdate: (comments: Comment[]) => void,
   onError?: (error: Error) => void
 ) {
+  const db = getFirebaseDb();
   const ref = collection(db, `${planPath}/comments`);
   const q = query(ref, orderBy("createdAt", "asc"));
   return onSnapshot(
@@ -191,6 +195,7 @@ export async function postComment(
   text: string,
   authorName?: string
 ) {
+  const db = getFirebaseDb();
   const ref = collection(db, `${planPath}/comments`);
   await addDoc(ref, {
     text,
@@ -200,6 +205,7 @@ export async function postComment(
 }
 
 export async function createPlan(userId: string) {
+  const db = getFirebaseDb();
   const ref = collection(db, "users", userId, "travelPlans");
   const docRef = await addDoc(ref, {
     name: "新しいLog",
@@ -215,21 +221,25 @@ export async function createPlan(userId: string) {
 }
 
 export async function deleteComment(planPath: string, commentId: string) {
+  const db = getFirebaseDb();
   const ref = doc(db, `${planPath}/comments/${commentId}`);
   await deleteDoc(ref);
 }
 
 export async function deletePlan(planPath: string) {
+  const db = getFirebaseDb();
   const ref = doc(db, planPath);
   await deleteDoc(ref);
 }
 
 export async function updatePlan(planPath: string, updates: PlanUpdate) {
+  const db = getFirebaseDb();
   const ref = doc(db, planPath);
   await updateDoc(ref, updates);
 }
 
 export async function resetMyPlans(userId: string) {
+  const db = getFirebaseDb();
   const sources = [
     collection(db, "Users", userId, "travelPlans"),
     collection(db, "users", userId, "travelPlans"),

@@ -6,21 +6,25 @@ import {
   signInWithRedirect,
   signOut
 } from "firebase/auth";
-import { auth } from "@/lib/firebase";
+import { getFirebaseAuth } from "@/lib/firebase";
 
 export async function signInWithEmail(email: string, password: string) {
+  const auth = getFirebaseAuth();
   return signInWithEmailAndPassword(auth, email, password);
 }
 
 export async function signUpWithEmail(email: string, password: string) {
+  const auth = getFirebaseAuth();
   return createUserWithEmailAndPassword(auth, email, password);
 }
 
 export async function signOutUser() {
+  const auth = getFirebaseAuth();
   return signOut(auth);
 }
 
 export async function signInWithApple() {
+  const auth = getFirebaseAuth();
   const provider = new OAuthProvider("apple.com");
   provider.addScope("email");
   provider.addScope("name");
