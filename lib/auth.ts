@@ -24,6 +24,9 @@ export async function signInWithApple() {
   const provider = new OAuthProvider("apple.com");
   provider.addScope("email");
   provider.addScope("name");
+  provider.setCustomParameters({
+    locale: "ja"
+  });
 
   try {
     return await signInWithPopup(auth, provider);
