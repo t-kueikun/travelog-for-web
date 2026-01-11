@@ -1,6 +1,4 @@
 {
-  "/public/page": "app/public/page.js",
-  "/settings/page": "app/settings/page.js",
-  "/plans/[id]/page": "app/plans/[id]/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
   "/page": "app/page.js"
 }

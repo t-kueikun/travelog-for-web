@@ -73,4 +73,8 @@ a {
       transform: translateY(-2px);
     }
   }
+
+  .interactive-shadow {
+    transition: box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
 }

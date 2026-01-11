@@ -134,7 +134,7 @@ export default function PlanRow({ plan, canDelete = false, onDelete }: PlanRowPr
             handleClick();
           }
         }}
-        className="relative z-10 rounded-2xl card-surface p-4 shadow-cardSoft transition hover:shadow-card transition-transform duration-200 ease-out interactive-soft will-change-transform animate-fade-up motion-reduce:animate-none"
+        className="relative z-10 rounded-2xl card-surface p-4 shadow-cardSoft transition-transform hover:shadow-card duration-200 ease-out interactive-shadow will-change-transform"
         style={{ transform: `translateX(${translateX}px)`, touchAction: "pan-y" }}
       >
         <div className="flex items-start justify-between gap-4">
