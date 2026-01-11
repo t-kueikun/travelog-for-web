@@ -592,7 +592,10 @@ function applySavingsDrafts(drafts: SavingsDraft[]) {
     }
     const parsed = toNumberOrNull(draft.value);
     if (draft.isObject) {
-      return { ...(draft.raw as Record<string, unknown>), amount: parsed };
+      return {
+        ...(draft.raw as Record<string, unknown>),
+        amount: parsed ?? undefined
+      };
     }
     return parsed ?? 0;
   });
