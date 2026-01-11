@@ -191,8 +191,8 @@ const LINK_KEYS = [
   "ticketLink"
 ];
 
-function sumSavingsHistory(items: Array<number | { amount?: number }>) {
-  return items.reduce((sum, entry) => {
+function sumSavingsHistory(items: Array<number | { amount?: number }>): number {
+  return items.reduce<number>((sum, entry) => {
     if (typeof entry === "number") {
       return sum + entry;
     }
