@@ -11,11 +11,12 @@ import {
 
 type LoginViewProps = {
   authError?: string | null;
+  onBack?: () => void;
 };
 
 type Mode = "login" | "signup";
 
-export default function LoginView({ authError }: LoginViewProps) {
+export default function LoginView({ authError, onBack }: LoginViewProps) {
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -67,6 +68,26 @@ export default function LoginView({ authError }: LoginViewProps) {
     <div className="min-h-screen bg-chrome px-5 py-10">
       <div className="mx-auto flex w-full max-w-sm flex-col gap-6">
         <div className="space-y-2">
+          {onBack ? (
+            <button
+              onClick={onBack}
+              className="mb-2 flex items-center gap-1 text-sm font-medium text-slate-500 transition hover:text-slate-800"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-4 w-4 stroke-current stroke-2"
+              >
+                <path
+                  d="M10 19L3 12M3 12L10 5M3 12H21"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              トップへ戻る
+            </button>
+          ) : null}
           <h1 className="text-3xl font-semibold text-slate-900">TraveLog</h1>
           <p className="text-sm text-slate-500">
             {mode === "login" ? "ログインして続ける" : "新規登録してはじめる"}
@@ -78,22 +99,20 @@ export default function LoginView({ authError }: LoginViewProps) {
             <button
               type="button"
               onClick={() => setMode("login")}
-              className={`flex-1 rounded-full px-3 py-2 transition ${
-                mode === "login"
-                  ? "bg-white text-slate-900 shadow-cardSoft"
-                  : "hover:text-slate-700"
-              }`}
+              className={`flex-1 rounded-full px-3 py-2 transition ${mode === "login"
+                ? "bg-white text-slate-900 shadow-cardSoft"
+                : "hover:text-slate-700"
+                }`}
             >
               ログイン
             </button>
             <button
               type="button"
               onClick={() => setMode("signup")}
-              className={`flex-1 rounded-full px-3 py-2 transition ${
-                mode === "signup"
-                  ? "bg-white text-slate-900 shadow-cardSoft"
-                  : "hover:text-slate-700"
-              }`}
+              className={`flex-1 rounded-full px-3 py-2 transition ${mode === "signup"
+                ? "bg-white text-slate-900 shadow-cardSoft"
+                : "hover:text-slate-700"
+                }`}
             >
               新規登録
             </button>

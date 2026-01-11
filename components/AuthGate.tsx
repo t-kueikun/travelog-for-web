@@ -1,7 +1,8 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import type { User } from "firebase/auth";
+import LandingPage from "@/components/LandingPage";
 import LoginView from "@/components/LoginView";
 import { useAuth } from "@/components/AuthProvider";
 
@@ -11,6 +12,7 @@ type AuthGateProps = {
 
 export default function AuthGate({ children }: AuthGateProps) {
   const { user, loading, error } = useAuth();
+  const [showLogin, setShowLogin] = useState(false);
 
   if (loading) {
     return (
@@ -23,7 +25,15 @@ export default function AuthGate({ children }: AuthGateProps) {
   }
 
   if (!user) {
-    return <LoginView authError={error} />;
+    if (showLogin) {
+      return (
+        <LoginView
+          authError={error}
+          onBack={() => setShowLogin(false)}
+        />
+      );
+    }
+    return <LandingPage onLoginClick={() => setShowLogin(true)} />;
   }
 
   return <>{children(user)}</>;
