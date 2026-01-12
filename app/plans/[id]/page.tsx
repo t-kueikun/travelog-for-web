@@ -879,7 +879,7 @@ function SwipeDeleteCard({
       }
       deleteTimerRef.current = window.setTimeout(() => {
         onDelete();
-      }, 260);
+      }, 220);
       return;
     }
     setTranslateX(0);
@@ -891,7 +891,7 @@ function SwipeDeleteCard({
   return (
     <div
       className={`relative overflow-hidden rounded-2xl ${
-        isDeleting ? "pointer-events-none animate-burst-out" : ""
+        isDeleting ? "pointer-events-none animate-slide-out" : ""
       }`}
     >
       <div

@@ -51,9 +51,14 @@ type PlanRowProps = {
   plan: TravelPlan;
   canDelete?: boolean;
   onDelete?: (plan: TravelPlan) => void;
+  confirmMessage?: string;
 };
 
-export default function PlanRow({ plan, canDelete = false, onDelete }: PlanRowProps) {
+export default function PlanRow({
+  plan,
+  canDelete = false,
+  onDelete
+}: PlanRowProps) {
   const router = useRouter();
   const [translateX, setTranslateX] = useState(0);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -108,7 +113,7 @@ export default function PlanRow({ plan, canDelete = false, onDelete }: PlanRowPr
       }
       deleteTimerRef.current = window.setTimeout(() => {
         onDelete(plan);
-      }, 260);
+      }, 220);
       return;
     }
     setTranslateX(0);
@@ -127,7 +132,7 @@ export default function PlanRow({ plan, canDelete = false, onDelete }: PlanRowPr
   return (
     <div
       className={`relative overflow-hidden rounded-2xl ${
-        isDeleting ? "pointer-events-none animate-burst-out" : ""
+        isDeleting ? "pointer-events-none animate-slide-out" : ""
       }`}
     >
       {showDelete ? (
