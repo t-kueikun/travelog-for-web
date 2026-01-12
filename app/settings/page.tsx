@@ -46,7 +46,7 @@ function SettingsContent({ user }: { user: User }) {
   };
 
   return (
-    <PageShell title="設定" showTabBar={false} showSettings={false}>
+    <PageShell title="設定" showSettings={false}>
       <div className="space-y-4">
         {message ? (
           <div className="rounded-2xl bg-white p-4 text-sm text-emerald-600 shadow-cardSoft">

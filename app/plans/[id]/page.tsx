@@ -60,9 +60,20 @@ type BooleanDraft = {
   original: boolean | null;
 };
 
+type TransferDraft = {
+  raw: ItemRecord;
+  id: string;
+  station: FieldDraft;
+  depTime: FieldDraft;
+  arrTime: FieldDraft;
+};
+
 type TransportationDraft = {
   raw: ItemRecord;
+  mode: FieldDraft;
   name: FieldDraft;
+  serviceName: FieldDraft;
+  seatNumber: FieldDraft;
   from: FieldDraft;
   to: FieldDraft;
   depTime: FieldDraft;
@@ -70,6 +81,7 @@ type TransportationDraft = {
   price: NumberDraft;
   paid: BooleanDraft;
   notes: FieldDraft;
+  transfers: TransferDraft[];
 };
 
 type HotelDraft = {
@@ -105,12 +117,58 @@ type SavingsDraft = {
 };
 
 const TRANSPORT_NAME_KEYS = ["name", "title", "type"];
+const TRANSPORT_MODE_KEYS = ["type", "category", "kind", "mode"];
+const TRANSPORT_MODES = ["新幹線", "飛行機", "車", "船", "バス", "特急", "在来線"];
+const TRANSPORT_MODE_CONFIG: Record<
+  string,
+  {
+    serviceLabel?: string;
+    serviceKeys?: string[];
+    seatLabel?: string;
+    seatKeys?: string[];
+  }
+> = {
+  新幹線: {
+    serviceLabel: "列車名",
+    serviceKeys: ["trainName", "lineName", "serviceName"],
+    seatLabel: "座席番号",
+    seatKeys: ["seatNumber", "seat", "seatNo"]
+  },
+  特急: {
+    serviceLabel: "列車名",
+    serviceKeys: ["trainName", "lineName", "serviceName"],
+    seatLabel: "座席番号",
+    seatKeys: ["seatNumber", "seat", "seatNo"]
+  },
+  在来線: {
+    serviceLabel: "列車名",
+    serviceKeys: ["trainName", "lineName", "serviceName"]
+  },
+  飛行機: {
+    serviceLabel: "便番号",
+    serviceKeys: ["flightNumber", "flightNo", "serviceName"],
+    seatLabel: "座席番号",
+    seatKeys: ["seatNumber", "seat", "seatNo"]
+  },
+  バス: {
+    serviceLabel: "便名",
+    serviceKeys: ["busName", "serviceName"]
+  },
+  船: {
+    serviceLabel: "便名",
+    serviceKeys: ["shipName", "ferryName", "serviceName"],
+    seatLabel: "座席/部屋",
+    seatKeys: ["seatNumber", "cabin", "room"]
+  },
+  車: {}
+};
 const TRANSPORT_FROM_KEYS = [
   "from",
   "departure",
   "origin",
   "start",
   "startPlace",
+  "startLocation",
   "fromPlace",
   "departurePlace",
   "departPlace",
@@ -129,6 +187,7 @@ const TRANSPORT_TO_KEYS = [
   "destination",
   "end",
   "endPlace",
+  "endLocation",
   "toPlace",
   "arrivalPlace",
   "arrivePlace",
@@ -165,6 +224,9 @@ const TRANSPORT_ARR_KEYS = [
   "arrivalDate",
   "arriveDate"
 ];
+const TRANSFER_STATION_KEYS = ["station", "name", "title"];
+const TRANSFER_DEP_KEYS = ["departureTime", "depTime", "departAt"];
+const TRANSFER_ARR_KEYS = ["arrivalTime", "arrTime", "arriveAt"];
 
 const HOTEL_NAME_KEYS = ["name", "title"];
 const HOTEL_PRICE_KEYS = ["price", "amount", "cost", "fee", "total"];
@@ -362,6 +424,17 @@ function buildStringDraft(
   return { key, value, original: value };
 }
 
+function buildModeDraft(item: ItemRecord) {
+  const key = resolveKey(item, TRANSPORT_MODE_KEYS);
+  const rawValue = key ? getStringField(item, [key]) : "";
+  const value = TRANSPORT_MODES.includes(rawValue) ? rawValue : "新幹線";
+  return { key: key || TRANSPORT_MODE_KEYS[0], value, original: value };
+}
+
+function getModeConfig(mode: string) {
+  return TRANSPORT_MODE_CONFIG[mode] ?? TRANSPORT_MODE_CONFIG["新幹線"];
+}
+
 function buildLocationDraft(
   item: ItemRecord,
   keys: string[],
@@ -373,6 +446,28 @@ function buildLocationDraft(
     value = findLocationByPattern(item, patterns);
   }
   return { key, value, original: value };
+}
+
+function createDraftId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function buildTransferDrafts(items: ItemRecord[]) {
+  return items.map((raw) => {
+    const item = raw && typeof raw === "object" ? raw : {};
+    const existingId = typeof item.id === "string" ? item.id : "";
+    const id = existingId.trim() ? existingId : createDraftId();
+    return {
+      raw: item,
+      id,
+      station: buildStringDraft(item, TRANSFER_STATION_KEYS),
+      depTime: buildDateDraft(item, TRANSFER_DEP_KEYS),
+      arrTime: buildDateDraft(item, TRANSFER_ARR_KEYS)
+    } satisfies TransferDraft;
+  });
 }
 
 function buildDateDraft(item: ItemRecord, keys: string[], patterns: string[] = []) {
@@ -411,16 +506,29 @@ function buildBooleanDraft(
 function buildTransportationDrafts(items: ItemRecord[]) {
   return items.map((raw) => {
     const item = raw && typeof raw === "object" ? raw : {};
+    const mode = buildModeDraft(item);
+    const config = getModeConfig(mode.value);
+    const serviceKeys = config.serviceKeys ?? [];
+    const seatKeys = config.seatKeys ?? [];
+    const transfers = Array.isArray(item.transfers) ? item.transfers : [];
     return {
       raw: item,
+      mode,
       name: buildStringDraft(item, TRANSPORT_NAME_KEYS),
+      serviceName: serviceKeys.length
+        ? buildStringDraft(item, serviceKeys)
+        : { key: "", value: "", original: "" },
+      seatNumber: seatKeys.length
+        ? buildStringDraft(item, seatKeys)
+        : { key: "", value: "", original: "" },
       from: buildLocationDraft(item, TRANSPORT_FROM_KEYS, TRANSPORT_FROM_PATTERNS),
       to: buildLocationDraft(item, TRANSPORT_TO_KEYS, TRANSPORT_TO_PATTERNS),
       depTime: buildDateDraft(item, TRANSPORT_DEP_KEYS),
       arrTime: buildDateDraft(item, TRANSPORT_ARR_KEYS),
       price: buildNumberDraft(item, TRANSPORT_PRICE_KEYS),
       paid: buildBooleanDraft(item, TRANSPORT_PAID_KEYS),
-      notes: buildStringDraft(item, NOTES_KEYS)
+      notes: buildStringDraft(item, NOTES_KEYS),
+      transfers: buildTransferDrafts(transfers as ItemRecord[])
     } satisfies TransportationDraft;
   });
 }
@@ -524,10 +632,23 @@ function applyBooleanDraft(item: ItemRecord, draft: BooleanDraft) {
   item[draft.key] = draft.value;
 }
 
+function applyTransferDrafts(drafts: TransferDraft[]) {
+  return drafts.map((draft) => {
+    const nextItem: ItemRecord = { ...draft.raw, id: draft.id };
+    applyStringDraft(nextItem, draft.station);
+    applyStringDraft(nextItem, draft.depTime);
+    applyStringDraft(nextItem, draft.arrTime);
+    return nextItem;
+  });
+}
+
 function applyTransportationDrafts(drafts: TransportationDraft[]) {
   return drafts.map((draft) => {
     const nextItem: ItemRecord = { ...draft.raw };
+    applyStringDraft(nextItem, draft.mode);
     applyStringDraft(nextItem, draft.name);
+    applyStringDraft(nextItem, draft.serviceName);
+    applyStringDraft(nextItem, draft.seatNumber);
     applyStringDraft(nextItem, draft.from);
     applyStringDraft(nextItem, draft.to);
     applyStringDraft(nextItem, draft.depTime);
@@ -535,6 +656,9 @@ function applyTransportationDrafts(drafts: TransportationDraft[]) {
     applyNumberDraft(nextItem, draft.price);
     applyBooleanDraft(nextItem, draft.paid);
     applyStringDraft(nextItem, draft.notes);
+    if (draft.mode.value === "在来線" || Array.isArray(draft.raw.transfers)) {
+      nextItem.transfers = applyTransferDrafts(draft.transfers);
+    }
     return nextItem;
   });
 }
@@ -592,7 +716,10 @@ function applySavingsDrafts(drafts: SavingsDraft[]) {
     }
     const parsed = toNumberOrNull(draft.value);
     if (draft.isObject) {
-      return { ...(draft.raw as Record<string, unknown>), amount: parsed };
+      return {
+        ...(draft.raw as Record<string, unknown>),
+        amount: parsed ?? undefined
+      };
     }
     return parsed ?? 0;
   });
@@ -703,12 +830,14 @@ function SwipeDeleteCard({
   children: ReactNode;
 }) {
   const [translateX, setTranslateX] = useState(0);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const deleteTimerRef = useRef<number | null>(null);
   const draggingRef = useRef(false);
   const swipingRef = useRef(false);
   const startRef = useRef({ x: 0, y: 0 });
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!enabled || isInteractiveTarget(event.target)) {
+    if (!enabled || isDeleting || isInteractiveTarget(event.target)) {
       return;
     }
     draggingRef.current = true;
@@ -718,7 +847,7 @@ function SwipeDeleteCard({
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!draggingRef.current || !enabled) {
+    if (!draggingRef.current || !enabled || isDeleting) {
       return;
     }
     const deltaX = event.clientX - startRef.current.x;
@@ -738,20 +867,37 @@ function SwipeDeleteCard({
   };
 
   const handlePointerEnd = () => {
-    if (!draggingRef.current) {
+    if (!draggingRef.current || isDeleting) {
       return;
     }
     draggingRef.current = false;
     if (translateX <= -80) {
-      onDelete();
+      setIsDeleting(true);
       setTranslateX(0);
+      if (deleteTimerRef.current) {
+        window.clearTimeout(deleteTimerRef.current);
+      }
+      deleteTimerRef.current = window.setTimeout(() => {
+        onDelete();
+      }, 260);
       return;
     }
     setTranslateX(0);
   };
 
+  const deleteOpacity =
+    enabled && !isDeleting ? Math.min(1, Math.abs(translateX) / 80) : 0;
+
   return (
-    <div className="relative overflow-hidden rounded-2xl bg-rose-500">
+    <div
+      className={`relative overflow-hidden rounded-2xl ${
+        isDeleting ? "pointer-events-none animate-burst-out" : ""
+      }`}
+    >
+      <div
+        className="pointer-events-none absolute inset-0 rounded-2xl bg-rose-500"
+        style={{ opacity: deleteOpacity }}
+      />
       {enabled ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-end pr-6 text-sm font-semibold text-white">
           削除
@@ -918,7 +1064,19 @@ function PlanDetailContent({ user }: { user: User }) {
   const addTransport = () => {
     setTransportEdits((prev) => {
       const base = prev[0];
+      const modeValue = base?.mode.value ?? "新幹線";
+      const modeKey = base?.mode.key || TRANSPORT_MODE_KEYS[0];
+      const modeConfig = getModeConfig(modeValue);
+      const serviceKey =
+        modeConfig.serviceKeys?.find((key) => key === base?.serviceName.key) ??
+        modeConfig.serviceKeys?.[0] ??
+        "";
+      const seatKey =
+        modeConfig.seatKeys?.find((key) => key === base?.seatNumber.key) ??
+        modeConfig.seatKeys?.[0] ??
+        "";
       const item: ItemRecord = {
+        [modeKey]: modeValue,
         [base?.name.key || TRANSPORT_NAME_KEYS[0]]: "",
         [base?.from.key || TRANSPORT_FROM_KEYS[0]]: "",
         [base?.to.key || TRANSPORT_TO_KEYS[0]]: "",
@@ -928,6 +1086,15 @@ function PlanDetailContent({ user }: { user: User }) {
         [base?.paid.key || TRANSPORT_PAID_KEYS[0]]: false,
         [base?.notes.key || NOTES_KEYS[0]]: ""
       };
+      if (serviceKey) {
+        item[serviceKey] = "";
+      }
+      if (seatKey) {
+        item[seatKey] = "";
+      }
+      if (modeValue === "在来線") {
+        item.transfers = [];
+      }
       return [...prev, ...buildTransportationDrafts([item])];
     });
   };
@@ -1187,7 +1354,7 @@ function PlanDetailContent({ user }: { user: User }) {
   ]);
 
   return (
-    <PageShell title={plan?.name || "プラン詳細"} showTabBar={false}>
+    <PageShell title={plan?.name || "プラン詳細"}>
       <div className="space-y-6">
         {planError ? (
           <div className="rounded-2xl bg-white p-4 text-sm text-rose-500 shadow-cardSoft">
@@ -1410,100 +1577,389 @@ function PlanDetailContent({ user }: { user: User }) {
                         onDelete={() => removeTransport(index)}
                       >
                         <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
-                          <div className="grid gap-3 md:grid-cols-2">
-                            <label className="block text-xs font-semibold text-slate-500">
-                              移動名
-                              <input
-                                value={draft.name.value}
-                                onChange={(event) =>
-                                  updateTransport(index, (current) => ({
-                                    ...current,
-                                    name: { ...current.name, value: event.target.value }
-                                  }))
-                                }
-                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                              />
-                            </label>
-                            <label className="block text-xs font-semibold text-slate-500">
-                              金額
-                              <input
-                                type="number"
-                                inputMode="numeric"
-                                value={draft.price.value}
-                                onChange={(event) =>
-                                  updateTransport(index, (current) => ({
-                                    ...current,
-                                    price: { ...current.price, value: event.target.value }
-                                  }))
-                                }
-                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                              />
-                            </label>
-                          </div>
-                          <div className="mt-3 grid gap-3 md:grid-cols-2">
-                            <label className="block text-xs font-semibold text-slate-500">
-                              出発地
-                              <input
-                                value={draft.from.value}
-                                onChange={(event) =>
-                                  updateTransport(index, (current) => ({
-                                    ...current,
-                                    from: { ...current.from, value: event.target.value }
-                                  }))
-                                }
-                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                              />
-                            </label>
-                            <label className="block text-xs font-semibold text-slate-500">
-                              到着地
-                              <input
-                                value={draft.to.value}
-                                onChange={(event) =>
-                                  updateTransport(index, (current) => ({
-                                    ...current,
-                                    to: { ...current.to, value: event.target.value }
-                                  }))
-                                }
-                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                              />
-                            </label>
-                          </div>
-                          <div className="mt-3 grid gap-3 md:grid-cols-2">
-                            <label className="block text-xs font-semibold text-slate-500">
-                              出発時刻
-                              <input
-                                value={draft.depTime.value}
-                                onChange={(event) =>
-                                  updateTransport(index, (current) => ({
-                                    ...current,
-                                    depTime: {
-                                      ...current.depTime,
-                                      value: event.target.value
+                          <div className="mb-4">
+                            <p className="text-xs font-semibold text-slate-500">
+                              移動手段の種類
+                            </p>
+                            <div className="mt-2 flex flex-wrap gap-2 rounded-2xl bg-slate-100 p-2">
+                              {TRANSPORT_MODES.map((mode) => {
+                                const selected = draft.mode.value === mode;
+                                return (
+                                  <button
+                                    key={`${mode}-${index}`}
+                                    type="button"
+                                    onClick={() =>
+                                      updateTransport(index, (current) => {
+                                        if (current.mode.value === mode) {
+                                          return current;
+                                        }
+                                        const config = getModeConfig(mode);
+                                        const serviceKey = config.serviceKeys?.[0] ?? "";
+                                        const seatKey = config.seatKeys?.[0] ?? "";
+                                        const nextRaw = { ...current.raw };
+                                        if (mode !== "在来線") {
+                                          delete nextRaw.transfers;
+                                        }
+                                        return {
+                                          ...current,
+                                          raw: nextRaw,
+                                          mode: { ...current.mode, value: mode },
+                                          serviceName: {
+                                            key: serviceKey,
+                                            value: "",
+                                            original: ""
+                                          },
+                                          seatNumber: {
+                                            key: seatKey,
+                                            value: "",
+                                            original: ""
+                                          },
+                                          transfers:
+                                            mode === "在来線" ? current.transfers : []
+                                        };
+                                      })
                                     }
-                                  }))
-                                }
-                                placeholder="例: 2025-11-23 12:15"
-                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                              />
-                            </label>
-                            <label className="block text-xs font-semibold text-slate-500">
-                              到着時刻
-                              <input
-                                value={draft.arrTime.value}
-                                onChange={(event) =>
-                                  updateTransport(index, (current) => ({
-                                    ...current,
-                                    arrTime: {
-                                      ...current.arrTime,
-                                      value: event.target.value
-                                    }
-                                  }))
-                                }
-                                placeholder="例: 2025-11-23 14:40"
-                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                              />
-                            </label>
+                                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                                      selected
+                                        ? "bg-white text-slate-900 shadow-sm"
+                                        : "text-slate-500 hover:text-slate-700"
+                                    }`}
+                                  >
+                                    {mode}
+                                  </button>
+                                );
+                              })}
+                            </div>
                           </div>
+                          {draft.mode.value === "在来線" ? (
+                            <>
+                              <label className="block text-xs font-semibold text-slate-500">
+                                金額
+                                <input
+                                  type="number"
+                                  inputMode="numeric"
+                                  value={draft.price.value}
+                                  onChange={(event) =>
+                                    updateTransport(index, (current) => ({
+                                      ...current,
+                                      price: {
+                                        ...current.price,
+                                        value: event.target.value
+                                      }
+                                    }))
+                                  }
+                                  className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                />
+                              </label>
+                              <div className="mt-4 space-y-3">
+                              <div className="flex items-center justify-between">
+                                <p className="text-xs font-semibold text-slate-500">
+                                  乗換駅
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateTransport(index, (current) => ({
+                                      ...current,
+                                      transfers: [
+                                        ...current.transfers,
+                                        ...buildTransferDrafts([
+                                          {
+                                            id: createDraftId(),
+                                            station: "",
+                                            arrivalTime: "",
+                                            departureTime: ""
+                                          }
+                                        ])
+                                      ]
+                                    }))
+                                  }
+                                  className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600"
+                                >
+                                  乗換を追加
+                                </button>
+                              </div>
+                              {draft.transfers.length === 0 ? (
+                                <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                                  まだ乗換駅がありません。
+                                </div>
+                              ) : (
+                                <div className="space-y-2">
+                                  {draft.transfers.map((transfer, transferIndex) => (
+                                    <div
+                                      key={`${transfer.id}-${transferIndex}`}
+                                      className="rounded-xl border border-slate-100 bg-slate-50 p-3"
+                                    >
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-xs font-semibold text-slate-500">
+                                          乗換 {transferIndex + 1}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            updateTransport(index, (current) => ({
+                                              ...current,
+                                              transfers: current.transfers.filter(
+                                                (_, idx) => idx !== transferIndex
+                                              )
+                                            }))
+                                          }
+                                          className="text-xs font-semibold text-rose-500"
+                                        >
+                                          削除
+                                        </button>
+                                      </div>
+                                      <div className="mt-2 grid gap-3 md:grid-cols-2">
+                                        <label className="block text-xs font-semibold text-slate-500">
+                                          駅名
+                                          <input
+                                            value={transfer.station.value}
+                                            onChange={(event) =>
+                                              updateTransport(index, (current) => ({
+                                                ...current,
+                                                transfers: current.transfers.map(
+                                                  (item, idx) =>
+                                                    idx === transferIndex
+                                                      ? {
+                                                          ...item,
+                                                          station: {
+                                                            ...item.station,
+                                                            value: event.target.value
+                                                          }
+                                                        }
+                                                      : item
+                                                )
+                                              }))
+                                            }
+                                            className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                                          />
+                                        </label>
+                                        <label className="block text-xs font-semibold text-slate-500">
+                                          到着時刻
+                                          <input
+                                            value={transfer.arrTime.value}
+                                            onChange={(event) =>
+                                              updateTransport(index, (current) => ({
+                                                ...current,
+                                                transfers: current.transfers.map(
+                                                  (item, idx) =>
+                                                    idx === transferIndex
+                                                      ? {
+                                                          ...item,
+                                                          arrTime: {
+                                                            ...item.arrTime,
+                                                            value: event.target.value
+                                                          }
+                                                        }
+                                                      : item
+                                                )
+                                              }))
+                                            }
+                                            placeholder="例: 2026-01-11 21:50"
+                                            className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                                          />
+                                        </label>
+                                      </div>
+                                      <label className="mt-3 block text-xs font-semibold text-slate-500">
+                                        出発時刻
+                                        <input
+                                          value={transfer.depTime.value}
+                                          onChange={(event) =>
+                                            updateTransport(index, (current) => ({
+                                              ...current,
+                                              transfers: current.transfers.map(
+                                                (item, idx) =>
+                                                  idx === transferIndex
+                                                    ? {
+                                                        ...item,
+                                                        depTime: {
+                                                          ...item.depTime,
+                                                          value: event.target.value
+                                                        }
+                                                      }
+                                                    : item
+                                              )
+                                            }))
+                                          }
+                                          placeholder="例: 2026-01-11 21:50"
+                                          className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+                                        />
+                                      </label>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              {(() => {
+                                const modeConfig = getModeConfig(draft.mode.value);
+                                const hasService = Boolean(modeConfig.serviceLabel);
+                                const hasSeat = Boolean(modeConfig.seatLabel);
+                                return hasService || hasSeat ? (
+                                  <div className="mb-3 grid gap-3 md:grid-cols-2">
+                                    {hasService ? (
+                                      <label className="block text-xs font-semibold text-slate-500">
+                                        {modeConfig.serviceLabel}
+                                        <input
+                                          value={draft.serviceName.value}
+                                          onChange={(event) =>
+                                            updateTransport(index, (current) => ({
+                                              ...current,
+                                              serviceName: {
+                                                ...current.serviceName,
+                                                value: event.target.value
+                                              }
+                                            }))
+                                          }
+                                          className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                        />
+                                      </label>
+                                    ) : null}
+                                    {hasSeat ? (
+                                      <label className="block text-xs font-semibold text-slate-500">
+                                        {modeConfig.seatLabel}
+                                        <input
+                                          value={draft.seatNumber.value}
+                                          onChange={(event) =>
+                                            updateTransport(index, (current) => ({
+                                              ...current,
+                                              seatNumber: {
+                                                ...current.seatNumber,
+                                                value: event.target.value
+                                              }
+                                            }))
+                                          }
+                                          className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                        />
+                                      </label>
+                                    ) : null}
+                                  </div>
+                                ) : null;
+                              })()}
+                              <div className="grid gap-3 md:grid-cols-2">
+                                <label className="block text-xs font-semibold text-slate-500">
+                                  移動名
+                                  <input
+                                    value={draft.name.value}
+                                    onChange={(event) =>
+                                      updateTransport(index, (current) => ({
+                                        ...current,
+                                        name: {
+                                          ...current.name,
+                                          value: event.target.value
+                                        }
+                                      }))
+                                    }
+                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                  />
+                                </label>
+                                <label className="block text-xs font-semibold text-slate-500">
+                                  金額
+                                  <input
+                                    type="number"
+                                    inputMode="numeric"
+                                    value={draft.price.value}
+                                    onChange={(event) =>
+                                      updateTransport(index, (current) => ({
+                                        ...current,
+                                        price: {
+                                          ...current.price,
+                                          value: event.target.value
+                                        }
+                                      }))
+                                    }
+                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                  />
+                                </label>
+                              </div>
+                              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                <label className="block text-xs font-semibold text-slate-500">
+                                  出発地
+                                  <input
+                                    value={draft.from.value}
+                                    onChange={(event) =>
+                                      updateTransport(index, (current) => ({
+                                        ...current,
+                                        from: {
+                                          ...current.from,
+                                          value: event.target.value
+                                        }
+                                      }))
+                                    }
+                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                  />
+                                </label>
+                                <label className="block text-xs font-semibold text-slate-500">
+                                  到着地
+                                  <input
+                                    value={draft.to.value}
+                                    onChange={(event) =>
+                                      updateTransport(index, (current) => ({
+                                        ...current,
+                                        to: { ...current.to, value: event.target.value }
+                                      }))
+                                    }
+                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                  />
+                                </label>
+                              </div>
+                              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                <label className="block text-xs font-semibold text-slate-500">
+                                  出発時刻
+                                  <input
+                                    value={draft.depTime.value}
+                                    onChange={(event) =>
+                                      updateTransport(index, (current) => ({
+                                        ...current,
+                                        depTime: {
+                                          ...current.depTime,
+                                          value: event.target.value
+                                        }
+                                      }))
+                                    }
+                                    placeholder="例: 2025-11-23 12:15"
+                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                  />
+                                </label>
+                                <label className="block text-xs font-semibold text-slate-500">
+                                  到着時刻
+                                  <input
+                                    value={draft.arrTime.value}
+                                    onChange={(event) =>
+                                      updateTransport(index, (current) => ({
+                                        ...current,
+                                        arrTime: {
+                                          ...current.arrTime,
+                                          value: event.target.value
+                                        }
+                                      }))
+                                    }
+                                    placeholder="例: 2025-11-23 14:40"
+                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                  />
+                                </label>
+                              </div>
+                              <label className="mt-3 block text-xs font-semibold text-slate-500">
+                                メモ
+                                <textarea
+                                  value={draft.notes.value}
+                                  onChange={(event) =>
+                                    updateTransport(index, (current) => ({
+                                      ...current,
+                                      notes: {
+                                        ...current.notes,
+                                        value: event.target.value
+                                      }
+                                    }))
+                                  }
+                                  rows={2}
+                                  className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                />
+                              </label>
+                            </>
+                          )}
                           <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-500">
                             <input
                               type="checkbox"
@@ -1521,20 +1977,6 @@ function PlanDetailContent({ user }: { user: User }) {
                             />
                             支払い済み
                           </label>
-                          <label className="mt-3 block text-xs font-semibold text-slate-500">
-                            メモ
-                            <textarea
-                              value={draft.notes.value}
-                              onChange={(event) =>
-                                updateTransport(index, (current) => ({
-                                  ...current,
-                                  notes: { ...current.notes, value: event.target.value }
-                                }))
-                              }
-                              rows={2}
-                              className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                            />
-                          </label>
                         </div>
                       </SwipeDeleteCard>
                     ))}
@@ -1550,6 +1992,18 @@ function PlanDetailContent({ user }: { user: User }) {
                     const name =
                       getStringField(item, TRANSPORT_NAME_KEYS) ||
                       `移動 ${index + 1}`;
+                    const mode = getStringField(item, TRANSPORT_MODE_KEYS);
+                    const modeConfig = getModeConfig(mode || "新幹線");
+                    const serviceLabel = modeConfig.serviceLabel;
+                    const seatLabel = modeConfig.seatLabel;
+                    const serviceValue =
+                      serviceLabel && modeConfig.serviceKeys?.length
+                        ? getStringField(item, modeConfig.serviceKeys)
+                        : "";
+                    const seatValue =
+                      seatLabel && modeConfig.seatKeys?.length
+                        ? getStringField(item, modeConfig.seatKeys)
+                        : "";
                     const price = getNumberField(item, TRANSPORT_PRICE_KEYS);
                     const isPaid = getBooleanField(item, TRANSPORT_PAID_KEYS);
                     let from = getLocationField(item, TRANSPORT_FROM_KEYS);
@@ -1566,6 +2020,9 @@ function PlanDetailContent({ user }: { user: User }) {
                     const arrTime = formatShortDateTime(
                       getDateField(item, TRANSPORT_ARR_KEYS)
                     );
+                    const transfers = Array.isArray(item.transfers)
+                      ? (item.transfers as ItemRecord[])
+                      : [];
                     const notes = getStringField(item, NOTES_KEYS);
 
                     return (
@@ -1583,12 +2040,35 @@ function PlanDetailContent({ user }: { user: User }) {
                             </span>
                           ) : null}
                         </div>
+                        {mode ? (
+                          <p className="mt-2 text-xs font-semibold text-slate-500">
+                            {mode}
+                          </p>
+                        ) : null}
                         {isPaid !== null ? (
                           <p className="mt-2 text-xs font-semibold text-emerald-600">
                             {isPaid ? "支払い済み" : "未払い"}
                           </p>
                         ) : null}
                         <div className="mt-3 space-y-1 text-xs text-slate-500">
+                          {serviceLabel && serviceValue ? (
+                            <div className="flex items-center justify-between gap-4">
+                              <span>
+                                {serviceLabel}: {serviceValue}
+                              </span>
+                              {seatLabel && seatValue ? (
+                                <span>
+                                  {seatLabel}: {seatValue}
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : seatLabel && seatValue ? (
+                            <div className="flex items-center justify-between gap-4">
+                              <span>
+                                {seatLabel}: {seatValue}
+                              </span>
+                            </div>
+                          ) : null}
                           <div className="flex items-center justify-between gap-4">
                             <span>出発地: {from || "—"}</span>
                             <span>到着地: {to || "—"}</span>
@@ -1597,6 +2077,41 @@ function PlanDetailContent({ user }: { user: User }) {
                             <span>DEP: {depTime || "—"}</span>
                             <span>ARR: {arrTime || "—"}</span>
                           </div>
+                          {mode === "在来線" && transfers.length > 0 ? (
+                            <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                              <p className="font-semibold text-slate-500">
+                                乗換駅
+                              </p>
+                              <div className="mt-2 space-y-1">
+                                {transfers.map((transfer, transferIndex) => {
+                                  const station = getStringField(transfer, [
+                                    "station",
+                                    "name",
+                                    "title"
+                                  ]);
+                                  const transferArr = formatShortDateTime(
+                                    getDateField(transfer, TRANSFER_ARR_KEYS)
+                                  );
+                                  const transferDep = formatShortDateTime(
+                                    getDateField(transfer, TRANSFER_DEP_KEYS)
+                                  );
+                                  return (
+                                    <div
+                                      key={`transfer-${transferIndex}`}
+                                      className="flex flex-wrap items-center justify-between gap-2"
+                                    >
+                                      <span>
+                                        {transferIndex + 1}. {station || "駅名未設定"}
+                                      </span>
+                                      <span className="text-slate-400">
+                                        {transferArr || "—"} → {transferDep || "—"}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
                           {notes ? <p>メモ: {notes}</p> : null}
                         </div>
                       </div>
@@ -2071,8 +2586,10 @@ function PlanDetailContent({ user }: { user: User }) {
                           enabled={canEdit}
                           onDelete={() => removeSavings(index)}
                         >
-                          <label className="block text-xs font-semibold text-slate-500">
-                            貯金 {index + 1}
+                          <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
+                            <p className="text-xs font-semibold text-slate-500">
+                              貯金 {index + 1}
+                            </p>
                             <input
                               type="number"
                               inputMode="numeric"
@@ -2085,7 +2602,7 @@ function PlanDetailContent({ user }: { user: User }) {
                               }
                               className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                             />
-                          </label>
+                          </div>
                         </SwipeDeleteCard>
                       ))}
                     </div>
