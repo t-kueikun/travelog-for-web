@@ -6,41 +6,40 @@ export default function PublicFooter() {
     const currentYear = new Date().getFullYear();
 
     return (
-        <footer className="bg-slate-50 py-12 border-t border-slate-100">
-            <div className="mx-auto max-w-6xl px-6">
-                <div className="grid gap-8 md:grid-cols-4">
+        <footer className="border-t border-slate-100 bg-white py-12 text-sm text-slate-500">
+            <div className="mx-auto max-w-7xl px-6 lg:px-8">
+                <div className="grid gap-12 md:grid-cols-4 lg:gap-8">
                     <div className="col-span-2">
-                        <Link href="/" className="text-xl font-bold tracking-tight text-slate-900">
+                        <Link href="/" className="text-lg font-bold tracking-tight text-slate-900 hover:text-slate-700">
                             TraveLog
                         </Link>
-                        <p className="mt-4 text-sm text-slate-500 leading-relaxed max-w-xs">
-                            旅の計画から思い出の記録まで。<br />
-                            あなたの旅をよりスマートに、美しく彩るための<br />
-                            オールインワン・トラベルアプリです。
+                        <p className="mt-6 max-w-sm leading-relaxed">
+                            複雑な旅の計画を、シンプルに。<br />
+                            TraveLogは、あなたの旅をよりスマートに、<br />
+                            一元管理するためのオールインワン・プラットフォームです。
                         </p>
                     </div>
 
                     <div>
-                        <h4 className="font-semibold text-slate-900 mb-4">サイトマップ</h4>
-                        <ul className="space-y-2 text-sm text-slate-600">
-                            <li><Link href="/" className="hover:text-blue-600 transition">ホーム</Link></li>
-                            <li><Link href="/features" className="hover:text-blue-600 transition">特徴</Link></li>
-                            <li><Link href="/howto" className="hover:text-blue-600 transition">使い方</Link></li>
-                            <li><Link href="/gallery" className="hover:text-blue-600 transition">ギャラリー</Link></li>
+                        <h4 className="font-bold text-slate-900 mb-4">Site Map</h4>
+                        <ul className="space-y-3">
+                            <li><Link href="/" className="hover:text-slate-900 transition-colors">Home</Link></li>
+                            <li><Link href="/features" className="hover:text-slate-900 transition-colors">Features</Link></li>
+                            <li><Link href="/howto" className="hover:text-slate-900 transition-colors">How to use</Link></li>
                         </ul>
                     </div>
 
                     <div>
-                        <h4 className="font-semibold text-slate-900 mb-4">サポート</h4>
-                        <ul className="space-y-2 text-sm text-slate-600">
-                            <li><Link href="/contact" className="hover:text-blue-600 transition">お問い合わせ</Link></li>
-                            <li><Link href="/terms" className="hover:text-blue-600 transition">利用規約</Link></li>
-                            <li><Link href="/privacy" className="hover:text-blue-600 transition">プライバシーポリシー</Link></li>
+                        <h4 className="font-bold text-slate-900 mb-4">Legal & Support</h4>
+                        <ul className="space-y-3">
+                            <li><Link href="/contact" className="hover:text-slate-900 transition-colors">Contact</Link></li>
+                            <li><Link href="/terms" className="hover:text-slate-900 transition-colors">Terms of Service</Link></li>
+                            <li><Link href="/privacy" className="hover:text-slate-900 transition-colors">Privacy Policy</Link></li>
                         </ul>
                     </div>
                 </div>
 
-                <div className="mt-12 pt-8 border-t border-slate-200 text-center text-sm text-slate-500">
+                <div className="mt-12 border-t border-slate-100 pt-8 text-center md:text-left">
                     <p>&copy; {currentYear} TraveLog. All rights reserved.</p>
                 </div>
             </div>
