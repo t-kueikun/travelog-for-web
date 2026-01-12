@@ -56,6 +56,8 @@ type PlanRowProps = {
 export default function PlanRow({ plan, canDelete = false, onDelete }: PlanRowProps) {
   const router = useRouter();
   const [translateX, setTranslateX] = useState(0);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const deleteTimerRef = useRef<number | null>(null);
   const draggingRef = useRef(false);
   const swipingRef = useRef(false);
   const startRef = useRef({ x: 0, y: 0 });
@@ -64,7 +66,7 @@ export default function PlanRow({ plan, canDelete = false, onDelete }: PlanRowPr
   const encodedPath = encodeURIComponent(plan.path);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!canDelete) {
+    if (!canDelete || isDeleting) {
       return;
     }
     draggingRef.current = true;
@@ -74,7 +76,7 @@ export default function PlanRow({ plan, canDelete = false, onDelete }: PlanRowPr
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!draggingRef.current || !canDelete) {
+    if (!draggingRef.current || !canDelete || isDeleting) {
       return;
     }
     const deltaX = event.clientX - startRef.current.x;
@@ -94,29 +96,44 @@ export default function PlanRow({ plan, canDelete = false, onDelete }: PlanRowPr
   };
 
   const handlePointerEnd = () => {
-    if (!draggingRef.current) {
+    if (!draggingRef.current || isDeleting) {
       return;
     }
     draggingRef.current = false;
     if (translateX <= -80 && canDelete && onDelete) {
-      onDelete(plan);
+      setIsDeleting(true);
       setTranslateX(0);
+      if (deleteTimerRef.current) {
+        window.clearTimeout(deleteTimerRef.current);
+      }
+      deleteTimerRef.current = window.setTimeout(() => {
+        onDelete(plan);
+      }, 260);
       return;
     }
     setTranslateX(0);
   };
 
   const handleClick = () => {
-    if (swipingRef.current || Math.abs(translateX) > 5) {
+    if (isDeleting || swipingRef.current || Math.abs(translateX) > 5) {
       swipingRef.current = false;
       return;
     }
     router.push(`/plans/${encodedPath}`);
   };
 
+  const showDelete = canDelete && translateX < -4 && !isDeleting;
+
   return (
-    <div className="relative overflow-hidden rounded-2xl bg-rose-500">
-      {canDelete ? (
+    <div
+      className={`relative overflow-hidden rounded-2xl ${
+        isDeleting ? "pointer-events-none animate-burst-out" : ""
+      }`}
+    >
+      {showDelete ? (
+        <div className="pointer-events-none absolute inset-0 rounded-2xl bg-rose-500" />
+      ) : null}
+      {showDelete ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-end pr-6 text-sm font-semibold text-white">
           削除
         </div>
