@@ -8,7 +8,6 @@ export const metadata: Metadata = {
   description: "TraveLog web",
   applicationName: "TraveLog",
   manifest: "/manifest.webmanifest",
-  themeColor: "#F2F2F7",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
@@ -26,7 +25,8 @@ export const metadata: Metadata = {
 export const viewport = {
   width: "device-width",
   initialScale: 1,
-  viewportFit: "cover"
+  viewportFit: "cover",
+  themeColor: "#F2F2F7",
 };
 
 export default function RootLayout({
