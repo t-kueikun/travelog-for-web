@@ -85,10 +85,6 @@ function MyLogContent({ user }: { user: User }) {
             plan={plan}
             canDelete
             onDelete={async (target) => {
-              const ok = window.confirm("このプランを削除しますか？");
-              if (!ok) {
-                return;
-              }
               try {
                 await deletePlan(target.path);
                 setPlans((prev) => prev.filter((item) => item.path !== target.path));
