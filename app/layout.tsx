@@ -5,7 +5,25 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "TraveLog",
-  description: "TraveLog web"
+  description: "TraveLog web",
+  applicationName: "TraveLog",
+  manifest: "/manifest.webmanifest",
+  themeColor: "#F2F2F7",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "TraveLog"
+  },
+  icons: {
+    icon: "/icon.svg",
+    apple: "/icon.svg"
+  }
+};
+
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover"
 };
 
 export default function RootLayout({

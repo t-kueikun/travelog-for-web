@@ -122,18 +122,18 @@ export default function PlanRow({ plan, canDelete = false, onDelete }: PlanRowPr
     router.push(`/plans/${encodedPath}`);
   };
 
-  const showDelete = canDelete && translateX < -4 && !isDeleting;
+  const deleteOpacity = canDelete ? Math.min(1, Math.abs(translateX) / 80) : 0;
 
   return (
     <div
-      className={`relative overflow-hidden rounded-2xl ${
-        isDeleting ? "pointer-events-none animate-burst-out" : ""
-      }`}
+      className={`relative overflow-hidden rounded-2xl ${isDeleting ? "pointer-events-none animate-burst-out" : ""
+        }`}
     >
-      {showDelete ? (
-        <div className="pointer-events-none absolute inset-0 rounded-2xl bg-rose-500" />
-      ) : null}
-      {showDelete ? (
+      <div
+        className="pointer-events-none absolute inset-0 rounded-2xl bg-rose-500"
+        style={{ opacity: deleteOpacity }}
+      />
+      {canDelete ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-end pr-6 text-sm font-semibold text-white">
           削除
         </div>

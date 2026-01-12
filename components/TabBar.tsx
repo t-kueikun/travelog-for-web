@@ -13,7 +13,7 @@ export default function TabBar() {
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-10 border-t border-slate-200 bg-white/90 backdrop-blur">
-      <div className="mx-auto flex max-w-3xl items-center justify-between px-6 py-3">
+      <div className="mx-auto flex max-w-3xl items-center justify-between px-5 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
         {tabs.map((tab) => {
           const active = pathname === tab.href;
           return (
