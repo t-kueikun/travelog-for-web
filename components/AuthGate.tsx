@@ -1,7 +1,8 @@
 "use client";
 
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import type { User } from "firebase/auth";
+import { useSearchParams } from "next/navigation";
 import LandingPage from "@/components/LandingPage";
 import LoginView from "@/components/LoginView";
 import { useAuth } from "@/components/AuthProvider";
@@ -13,6 +14,13 @@ type AuthGateProps = {
 export default function AuthGate({ children }: AuthGateProps) {
   const { user, loading, error } = useAuth();
   const [showLogin, setShowLogin] = useState(false);
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    if (searchParams.get("login") === "true") {
+      setShowLogin(true);
+    }
+  }, [searchParams]);
 
   if (loading) {
     return (

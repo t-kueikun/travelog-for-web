@@ -13,7 +13,7 @@ type LandingPageProps = {
 export default function LandingPage({ onLoginClick }: LandingPageProps) {
     return (
         <div className="min-h-screen bg-[#FDFDFD] font-sans text-slate-900 selection:bg-slate-200 selection:text-black">
-            <PublicHeader />
+            <PublicHeader onLoginClick={onLoginClick} />
 
             <main>
                 {/* Hero Section */}

@@ -4,12 +4,20 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 
-export default function PublicHeader() {
+type PublicHeaderProps = {
+    onLoginClick?: () => void;
+};
+
+export default function PublicHeader({ onLoginClick }: PublicHeaderProps) {
     const pathname = usePathname();
     const router = useRouter();
 
     const handleLoginClick = () => {
-        router.push("/");
+        if (onLoginClick) {
+            onLoginClick();
+        } else {
+            router.push("/?login=true");
+        }
     };
 
     const navItems = [
@@ -39,8 +47,8 @@ export default function PublicHeader() {
                             key={item.href}
                             href={item.href}
                             className={`group relative text-sm font-medium tracking-wide transition-colors duration-200 ${pathname === item.href
-                                    ? "text-slate-900"
-                                    : "text-slate-500 hover:text-slate-900"
+                                ? "text-slate-900"
+                                : "text-slate-500 hover:text-slate-900"
                                 }`}
                         >
                             {item.label}
