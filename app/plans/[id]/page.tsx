@@ -116,6 +116,162 @@ type SavingsDraft = {
   isObject: boolean;
 };
 
+const AIRPORT_NAME_MAP: Record<string, string> = {
+  HND: "羽田空港",
+  NRT: "成田国際空港",
+  KIX: "関西国際空港",
+  ITM: "大阪国際空港（伊丹）",
+  NGO: "中部国際空港",
+  NKM: "名古屋飛行場",
+  CTS: "新千歳空港",
+  OKD: "札幌丘珠空港",
+  HKD: "函館空港",
+  AKJ: "旭川空港",
+  KUH: "釧路空港",
+  MMB: "女満別空港",
+  OBO: "とかち帯広空港",
+  MBE: "オホーツク紋別空港",
+  SHB: "中標津空港",
+  WKJ: "稚内空港",
+  RIS: "利尻空港",
+  HNA: "いわて花巻空港",
+  MSJ: "三沢空港",
+  AOJ: "青森空港",
+  AXT: "秋田空港",
+  SDJ: "仙台空港",
+  GAJ: "山形空港",
+  FKS: "福島空港",
+  ONJ: "大館能代空港",
+  IBR: "茨城空港",
+  OIM: "大島空港",
+  HAC: "八丈島空港",
+  MYE: "三宅島空港",
+  NLI: "新島空港",
+  KIJ: "新潟空港",
+  TOY: "富山空港",
+  KMQ: "小松空港",
+  NTQ: "能登空港",
+  FSZ: "富士山静岡空港",
+  MMJ: "信州まつもと空港",
+  OKJ: "岡山空港",
+  HIJ: "広島空港",
+  IZO: "出雲空港",
+  IWJ: "萩・石見空港",
+  TTJ: "鳥取空港",
+  UBJ: "山口宇部空港",
+  TJH: "但馬空港",
+  TAK: "高松空港",
+  TKS: "徳島空港",
+  MYJ: "松山空港",
+  KCZ: "高知空港",
+  FUK: "福岡空港",
+  KKJ: "北九州空港",
+  NGS: "長崎空港",
+  TSJ: "対馬空港",
+  IKI: "壱岐空港",
+  HSG: "佐賀空港",
+  OIT: "大分空港",
+  KMJ: "熊本空港",
+  KMI: "宮崎空港",
+  KOJ: "鹿児島空港",
+  ASJ: "奄美空港",
+  TNE: "種子島空港",
+  OKA: "那覇空港",
+  ISG: "石垣空港",
+  MMY: "宮古空港",
+  UEO: "久米島空港",
+  OGN: "与那国空港",
+  OKI: "隠岐空港",
+  RJTT: "羽田空港",
+  RJAA: "成田国際空港",
+  RJBB: "関西国際空港",
+  RJOO: "大阪国際空港（伊丹）",
+  RJGG: "中部国際空港",
+  RJCC: "新千歳空港",
+  RJFF: "福岡空港",
+  ROAH: "那覇空港",
+  RJOA: "広島空港",
+  RJOM: "松山空港",
+  RJOC: "高知空港",
+  RJOK: "高松空港",
+  RJBK: "熊本空港",
+  RJFK: "鹿児島空港",
+  RJFM: "宮崎空港",
+  RJFU: "長崎空港",
+  RJSK: "仙台空港",
+  RJSS: "仙台空港",
+  KSFO: "サンフランシスコ国際空港",
+  KLAX: "ロサンゼルス国際空港",
+  KJFK: "ジョン・F・ケネディ国際空港",
+  EGLL: "ロンドン・ヒースロー空港",
+  LFPG: "シャルル・ド・ゴール空港",
+  EDDF: "フランクフルト空港",
+  EHAM: "アムステルダム・スキポール空港",
+  OMDB: "ドバイ国際空港",
+  WSSS: "シンガポール・チャンギ空港",
+  RKSI: "仁川国際空港",
+  ZSPD: "上海浦東国際空港",
+  ZBAA: "北京首都国際空港",
+  VHHH: "香港国際空港",
+  YSSY: "シドニー国際空港",
+  YMML: "メルボルン空港",
+  LHR: "ロンドン・ヒースロー空港",
+  CDG: "シャルル・ド・ゴール空港",
+  FRA: "フランクフルト空港",
+  AMS: "アムステルダム・スキポール空港",
+  DXB: "ドバイ国際空港",
+  SIN: "シンガポール・チャンギ空港",
+  ICN: "仁川国際空港",
+  PVG: "上海浦東国際空港",
+  PEK: "北京首都国際空港",
+  HKG: "香港国際空港",
+  SYD: "シドニー国際空港",
+  MEL: "メルボルン空港",
+  SFO: "サンフランシスコ国際空港",
+  LAX: "ロサンゼルス国際空港",
+  JFK: "ジョン・F・ケネディ国際空港",
+  SEA: "シアトル・タコマ国際空港",
+  ORD: "シカゴ・オヘア国際空港",
+  IAH: "ジョージ・ブッシュ・インターコンチネンタル空港",
+  DFW: "ダラス・フォートワース国際空港",
+  HNL: "ダニエル・K・イノウエ国際空港"
+};
+
+const JP_CITY_NAME_MAP: Record<string, string> = {
+  Tokyo: "東京",
+  Osaka: "大阪",
+  Nagoya: "名古屋",
+  Sapporo: "札幌",
+  Fukuoka: "福岡",
+  Naha: "那覇",
+  Sendai: "仙台",
+  Hiroshima: "広島",
+  Nagasaki: "長崎",
+  Kagoshima: "鹿児島",
+  Kumamoto: "熊本",
+  Miyazaki: "宮崎",
+  Oita: "大分",
+  Okayama: "岡山",
+  Matsuyama: "松山",
+  Takamatsu: "高松",
+  Tokushima: "徳島",
+  Kochi: "高知",
+  Niigata: "新潟",
+  Toyama: "富山",
+  Kanazawa: "金沢",
+  Matsumoto: "松本",
+  Hakodate: "函館",
+  Asahikawa: "旭川",
+  Kushiro: "釧路",
+  Wakkanai: "稚内",
+  Obihiro: "帯広",
+  Amami: "奄美",
+  Ishigaki: "石垣",
+  Miyako: "宮古",
+  Yonago: "米子",
+  Izumo: "出雲"
+};
+
 const TRANSPORT_NAME_KEYS = ["name", "title", "type"];
 const TRANSPORT_MODE_KEYS = ["type", "category", "kind", "mode"];
 const TRANSPORT_MODES = ["新幹線", "飛行機", "車", "船", "バス", "特急", "在来線"];
@@ -394,6 +550,267 @@ function formatShortDateTime(value?: Date | string | null) {
   }
   const text = formatDateTime(value);
   return text || "";
+}
+
+function formatFlightDateTime(value?: string) {
+  if (!value) {
+    return "";
+  }
+  const dateMatch = value.match(/\d{4}-\d{2}-\d{2}/);
+  const timeMatch = value.match(/\d{2}:\d{2}/);
+  if (dateMatch && timeMatch) {
+    return `${dateMatch[0]} ${timeMatch[0]}`;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+}
+
+function splitDateTime(value?: string) {
+  if (!value) {
+    return { date: "", time: "" };
+  }
+  const dateMatch = value.match(/\d{4}-\d{2}-\d{2}/);
+  const timeMatch = value.match(/\d{2}:\d{2}/);
+  return {
+    date: dateMatch ? dateMatch[0] : "",
+    time: timeMatch ? timeMatch[0] : ""
+  };
+}
+
+function combineDateTime(date: string, time: string) {
+  const trimmedDate = date.trim();
+  const trimmedTime = time.trim();
+  if (!trimmedDate && !trimmedTime) {
+    return "";
+  }
+  if (!trimmedDate) {
+    return trimmedTime;
+  }
+  if (!trimmedTime) {
+    return trimmedDate;
+  }
+  return `${trimmedDate} ${trimmedTime}`;
+}
+
+function extractDateOnly(value?: string) {
+  if (!value) {
+    return "";
+  }
+  const match = value.match(/\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : "";
+}
+
+function shiftDate(value: string, diff: number) {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    return "";
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const base = new Date(Date.UTC(year, month - 1, day));
+  base.setUTCDate(base.getUTCDate() + diff);
+  return base.toISOString().slice(0, 10);
+}
+
+function buildDateCandidates(value: string) {
+  const candidates = [value];
+  const prev = shiftDate(value, -1);
+  const next = shiftDate(value, 1);
+  if (prev) {
+    candidates.push(prev);
+  }
+  if (next) {
+    candidates.push(next);
+  }
+  return Array.from(new Set(candidates));
+}
+
+function normalizeAirport(value: unknown) {
+  if (!value) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const iata = record.iata ?? record.iataCode ?? record.code ?? record.icao;
+    if (typeof iata === "string" && iata.trim()) {
+      const upper = iata.trim().toUpperCase();
+      const jpName = AIRPORT_NAME_MAP[upper];
+      if (jpName) {
+        return jpName;
+      }
+    }
+    const name = record.name ?? record.shortName ?? record.municipalityName;
+    if (typeof name === "string" && name.trim()) {
+      const countryCode =
+        typeof record.countryCode === "string" ? record.countryCode : "";
+      if (countryCode === "JP") {
+        const cleaned = name
+          .replace(/International/gi, "")
+          .replace(/Airport/gi, "")
+          .replace(/Airfield/gi, "")
+          .replace(/Air Base/gi, "")
+          .trim();
+        const jpCity =
+          JP_CITY_NAME_MAP[cleaned] ??
+          JP_CITY_NAME_MAP[name] ??
+          JP_CITY_NAME_MAP[cleaned.replace(/\s+/g, "")] ??
+          cleaned;
+        if (jpCity.includes("空港") || jpCity.includes("飛行場")) {
+          return jpCity;
+        }
+        return `${jpCity}空港`;
+      }
+      return name;
+    }
+    if (typeof iata === "string" && iata.trim()) {
+      return iata.trim().toUpperCase();
+    }
+  }
+  return "";
+}
+
+function normalizeTime(value: unknown) {
+  if (!value) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const scheduled = record.scheduledTime as Record<string, unknown> | undefined;
+    if (scheduled && typeof scheduled.local === "string" && scheduled.local.trim()) {
+      return scheduled.local;
+    }
+    const revised = record.revisedTime as Record<string, unknown> | undefined;
+    if (revised && typeof revised.local === "string" && revised.local.trim()) {
+      return revised.local;
+    }
+    const predicted = record.predictedTime as Record<string, unknown> | undefined;
+    if (predicted && typeof predicted.local === "string" && predicted.local.trim()) {
+      return predicted.local;
+    }
+    const runway = record.runwayTime as Record<string, unknown> | undefined;
+    if (runway && typeof runway.local === "string" && runway.local.trim()) {
+      return runway.local;
+    }
+    const local = record.local ?? record.localTime ?? record.scheduledTimeLocal;
+    if (typeof local === "string" && local.trim()) {
+      return local;
+    }
+    const time = record.time;
+    if (typeof time === "string" && time.trim()) {
+      return time;
+    }
+    const utc = record.utc ?? record.scheduledTimeUtc;
+    if (typeof utc === "string" && utc.trim()) {
+      return utc;
+    }
+  }
+  return "";
+}
+
+function extractFlightInfo(payload: unknown, targetDate?: string) {
+  const data = payload as Record<string, unknown>;
+  const dataValue = data?.data;
+  const flightsValue =
+    dataValue && typeof dataValue === "object" && !Array.isArray(dataValue)
+      ? (dataValue as Record<string, unknown>).flights
+      : undefined;
+  const candidates: Record<string, unknown>[] = [];
+  if (Array.isArray(dataValue)) {
+    candidates.push(...(dataValue as Record<string, unknown>[]));
+  }
+  if (Array.isArray(flightsValue)) {
+    candidates.push(...(flightsValue as Record<string, unknown>[]));
+  }
+  if (dataValue && typeof dataValue === "object" && !Array.isArray(dataValue)) {
+    candidates.push(dataValue as Record<string, unknown>);
+  }
+  if (candidates.length === 0 && data && typeof data === "object") {
+    candidates.push(data as Record<string, unknown>);
+  }
+
+  let record: Record<string, unknown> | undefined = candidates[0];
+  let dateMatch = true;
+  const target = targetDate?.trim();
+  if (target) {
+    const matched = candidates.find((item) => {
+      const departure = (item?.departure ??
+        (item?.departures as Record<string, unknown>[] | undefined)?.[0] ??
+        item?.departureAirport) as Record<string, unknown> | undefined;
+      const depTime =
+        normalizeTime(departure) ||
+        normalizeTime(item?.departureTime) ||
+        normalizeTime(item?.departureTimeUtc) ||
+        "";
+      const depDate = extractDateOnly(depTime);
+      return depDate === target;
+    });
+    if (matched) {
+      record = matched;
+    } else {
+      dateMatch = false;
+      record = candidates[0];
+    }
+  }
+
+  const departure = (record?.departure ??
+    (record?.departures as Record<string, unknown>[] | undefined)?.[0] ??
+    record?.departureAirport) as Record<string, unknown> | undefined;
+  const arrival = (record?.arrival ??
+    (record?.arrivals as Record<string, unknown>[] | undefined)?.[0] ??
+    record?.arrivalAirport) as Record<string, unknown> | undefined;
+
+  const departureAirport = normalizeAirport(departure?.airport ?? departure?.airportName);
+  const arrivalAirport = normalizeAirport(arrival?.airport ?? arrival?.airportName);
+  const departureScheduled =
+    (departure?.scheduledTime as Record<string, unknown> | undefined)?.local ??
+    (departure?.revisedTime as Record<string, unknown> | undefined)?.local ??
+    (departure?.predictedTime as Record<string, unknown> | undefined)?.local ??
+    (departure?.runwayTime as Record<string, unknown> | undefined)?.local ??
+    "";
+  const arrivalScheduled =
+    (arrival?.scheduledTime as Record<string, unknown> | undefined)?.local ??
+    (arrival?.revisedTime as Record<string, unknown> | undefined)?.local ??
+    (arrival?.predictedTime as Record<string, unknown> | undefined)?.local ??
+    "";
+  const departureTime =
+    (typeof departureScheduled === "string" && departureScheduled.trim()
+      ? departureScheduled
+      : "") ||
+    normalizeTime(departure) ||
+    normalizeTime(record?.departureTime) ||
+    normalizeTime(record?.departureTimeUtc) ||
+    "";
+  const arrivalTime =
+    (typeof arrivalScheduled === "string" && arrivalScheduled.trim()
+      ? arrivalScheduled
+      : "") ||
+    normalizeTime(arrival) ||
+    normalizeTime(record?.arrivalTime) ||
+    normalizeTime(record?.arrivalTimeUtc) ||
+    "";
+
+  return {
+    departureAirport,
+    arrivalAirport,
+    departureTime,
+    arrivalTime,
+    dateMatch
+  };
 }
 
 function resolveKey(item: ItemRecord, keys: string[], patterns: string[] = []) {
@@ -803,10 +1220,25 @@ function normalizeLink(raw: string) {
   if (!value) {
     return null;
   }
-  if (value.startsWith("http://") || value.startsWith("https://")) {
-    return value;
+  const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value);
+  const withScheme = hasScheme ? value : `https://${value}`;
+  try {
+    const url = new URL(withScheme);
+    if (!hasScheme) {
+      const host = url.hostname;
+      if (!host) {
+        return null;
+      }
+      const isLocal =
+        host === "localhost" || host.endsWith(".local") || host.endsWith(".test");
+      if (!isLocal && !host.includes(".")) {
+        return null;
+      }
+    }
+    return url.toString();
+  } catch {
+    return null;
   }
-  return `https://${value}`;
 }
 
 function getLinkField(item: ItemRecord) {
@@ -817,7 +1249,7 @@ function isInteractiveTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
     return false;
   }
-  return Boolean(target.closest("input, textarea, select, button, label"));
+  return Boolean(target.closest("input, textarea, select, button, label, a"));
 }
 
 function SwipeDeleteCard({
@@ -948,6 +1380,13 @@ function PlanDetailContent({ user }: { user: User }) {
   const [activityEdits, setActivityEdits] = useState<ActivityDraft[]>([]);
   const [packingEdits, setPackingEdits] = useState<PackingDraft[]>([]);
   const [savingsEdits, setSavingsEdits] = useState<SavingsDraft[]>([]);
+  const [flightFetchingIndex, setFlightFetchingIndex] = useState<number | null>(
+    null
+  );
+  const [flightFetchError, setFlightFetchError] = useState<string | null>(null);
+  const [flightFetchErrorIndex, setFlightFetchErrorIndex] = useState<number | null>(
+    null
+  );
 
   const applyPlanToEdits = (current: TravelPlan) => {
     setEditValues({
@@ -1029,6 +1468,108 @@ function PlanDetailContent({ user }: { user: User }) {
   };
   const removeSavings = (index: number) => {
     setSavingsEdits((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const fetchFlightInfo = async (index: number) => {
+    const draft = transportEdits[index];
+    if (!draft) {
+      return;
+    }
+    const flightNumber = draft.serviceName.value.replace(/\s+/g, "").toUpperCase().trim();
+    if (!flightNumber) {
+      setFlightFetchError("便番号を入力してください。");
+      setFlightFetchErrorIndex(index);
+      return;
+    }
+    const date =
+      extractDateOnly(draft.depTime.value) ||
+      extractDateOnly(editValues.startDate) ||
+      new Date().toISOString().slice(0, 10);
+    const dateCandidates = buildDateCandidates(date);
+
+    setFlightFetchingIndex(index);
+    setFlightFetchError(null);
+    setFlightFetchErrorIndex(null);
+    try {
+      let resolvedInfo: ReturnType<typeof extractFlightInfo> | null = null;
+      let fallbackInfo: ReturnType<typeof extractFlightInfo> | null = null;
+      for (const candidate of dateCandidates) {
+        const response = await fetch(
+          `/api/aerodatabox?flight=${encodeURIComponent(
+            flightNumber
+          )}&date=${encodeURIComponent(candidate)}`
+        );
+        if (!response.ok) {
+          const errorPayload = await response.json().catch(() => null);
+          if (errorPayload?.error === "missing_api_key") {
+            setFlightFetchError("RapidAPIキーが未設定です。");
+            setFlightFetchErrorIndex(index);
+            return;
+          }
+          if (
+            errorPayload?.error === "upstream_error" ||
+            errorPayload?.error === "not_found" ||
+            errorPayload?.status === 404
+          ) {
+            continue;
+          }
+          throw new Error("fetch_failed");
+        }
+        const payload = await response.json();
+        const info = extractFlightInfo(payload, candidate);
+        if (
+          info.departureAirport ||
+          info.arrivalAirport ||
+          info.departureTime ||
+          info.arrivalTime
+        ) {
+          if (info.dateMatch) {
+            resolvedInfo = info;
+            break;
+          }
+          fallbackInfo = info;
+        }
+      }
+
+      if (!resolvedInfo && fallbackInfo) {
+        resolvedInfo = fallbackInfo;
+      }
+      if (!resolvedInfo) {
+        setFlightFetchError("便情報が見つかりませんでした。");
+        setFlightFetchErrorIndex(index);
+        return;
+      }
+
+      updateTransport(index, (current) => ({
+        ...current,
+        from: {
+          ...current.from,
+          value: resolvedInfo.departureAirport || current.from.value
+        },
+        to: {
+          ...current.to,
+          value: resolvedInfo.arrivalAirport || current.to.value
+        },
+        depTime: {
+          ...current.depTime,
+          value: resolvedInfo.departureTime
+            ? formatFlightDateTime(resolvedInfo.departureTime)
+            : current.depTime.value
+        },
+        arrTime: {
+          ...current.arrTime,
+          value: resolvedInfo.arrivalTime
+            ? formatFlightDateTime(resolvedInfo.arrivalTime)
+            : current.arrTime.value
+        }
+      }));
+    } catch (error) {
+      setFlightFetchError("便情報の取得に失敗しました。");
+      setFlightFetchErrorIndex(index);
+      console.error(error);
+    } finally {
+      setFlightFetchingIndex(null);
+    }
   };
 
   const buildAutoSaveUpdates = () => {
@@ -1802,19 +2343,39 @@ function PlanDetailContent({ user }: { user: User }) {
                                     {hasService ? (
                                       <label className="block text-xs font-semibold text-slate-500">
                                         {modeConfig.serviceLabel}
-                                        <input
-                                          value={draft.serviceName.value}
-                                          onChange={(event) =>
-                                            updateTransport(index, (current) => ({
-                                              ...current,
-                                              serviceName: {
-                                                ...current.serviceName,
-                                                value: event.target.value
-                                              }
-                                            }))
-                                          }
-                                          className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                        />
+                                        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+                                          <input
+                                            value={draft.serviceName.value}
+                                            onChange={(event) =>
+                                              updateTransport(index, (current) => ({
+                                                ...current,
+                                                serviceName: {
+                                                  ...current.serviceName,
+                                                  value: event.target.value
+                                                }
+                                              }))
+                                            }
+                                            className="w-full flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                          />
+                                          {draft.mode.value === "飛行機" ? (
+                                            <button
+                                              type="button"
+                                              onClick={() => fetchFlightInfo(index)}
+                                              disabled={flightFetchingIndex === index}
+                                              className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
+                                            >
+                                              {flightFetchingIndex === index
+                                                ? "取得中..."
+                                                : "便情報"}
+                                            </button>
+                                          ) : null}
+                                        </div>
+                                        {flightFetchError &&
+                                        flightFetchErrorIndex === index ? (
+                                          <p className="mt-2 text-xs text-rose-500">
+                                            {flightFetchError}
+                                          </p>
+                                        ) : null}
                                       </label>
                                     ) : null}
                                     {hasSeat ? (
@@ -1905,42 +2466,141 @@ function PlanDetailContent({ user }: { user: User }) {
                                   />
                                 </label>
                               </div>
-                              <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                <label className="block text-xs font-semibold text-slate-500">
-                                  出発時刻
-                                  <input
-                                    value={draft.depTime.value}
-                                    onChange={(event) =>
-                                      updateTransport(index, (current) => ({
-                                        ...current,
-                                        depTime: {
-                                          ...current.depTime,
-                                          value: event.target.value
-                                        }
-                                      }))
-                                    }
-                                    placeholder="例: 2025-11-23 12:15"
-                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                  />
-                                </label>
-                                <label className="block text-xs font-semibold text-slate-500">
-                                  到着時刻
-                                  <input
-                                    value={draft.arrTime.value}
-                                    onChange={(event) =>
-                                      updateTransport(index, (current) => ({
-                                        ...current,
-                                        arrTime: {
-                                          ...current.arrTime,
-                                          value: event.target.value
-                                        }
-                                      }))
-                                    }
-                                    placeholder="例: 2025-11-23 14:40"
-                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                  />
-                                </label>
-                              </div>
+                              {draft.mode.value === "飛行機" ? (
+                                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                  <label className="block text-xs font-semibold text-slate-500">
+                                    出発日時
+                                    <div className="mt-2 flex gap-2">
+                                      <input
+                                        type="date"
+                                        value={splitDateTime(draft.depTime.value).date}
+                                        onChange={(event) => {
+                                          const current = splitDateTime(
+                                            draft.depTime.value
+                                          );
+                                          const nextValue = combineDateTime(
+                                            event.target.value,
+                                            current.time
+                                          );
+                                          updateTransport(index, (draftCurrent) => ({
+                                            ...draftCurrent,
+                                            depTime: {
+                                              ...draftCurrent.depTime,
+                                              value: nextValue
+                                            }
+                                          }));
+                                        }}
+                                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                      />
+                                      <input
+                                        type="time"
+                                        value={splitDateTime(draft.depTime.value).time}
+                                        onChange={(event) => {
+                                          const current = splitDateTime(
+                                            draft.depTime.value
+                                          );
+                                          const nextValue = combineDateTime(
+                                            current.date,
+                                            event.target.value
+                                          );
+                                          updateTransport(index, (draftCurrent) => ({
+                                            ...draftCurrent,
+                                            depTime: {
+                                              ...draftCurrent.depTime,
+                                              value: nextValue
+                                            }
+                                          }));
+                                        }}
+                                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                      />
+                                    </div>
+                                  </label>
+                                  <label className="block text-xs font-semibold text-slate-500">
+                                    到着日時
+                                    <div className="mt-2 flex gap-2">
+                                      <input
+                                        type="date"
+                                        value={splitDateTime(draft.arrTime.value).date}
+                                        onChange={(event) => {
+                                          const current = splitDateTime(
+                                            draft.arrTime.value
+                                          );
+                                          const nextValue = combineDateTime(
+                                            event.target.value,
+                                            current.time
+                                          );
+                                          updateTransport(index, (draftCurrent) => ({
+                                            ...draftCurrent,
+                                            arrTime: {
+                                              ...draftCurrent.arrTime,
+                                              value: nextValue
+                                            }
+                                          }));
+                                        }}
+                                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                      />
+                                      <input
+                                        type="time"
+                                        value={splitDateTime(draft.arrTime.value).time}
+                                        onChange={(event) => {
+                                          const current = splitDateTime(
+                                            draft.arrTime.value
+                                          );
+                                          const nextValue = combineDateTime(
+                                            current.date,
+                                            event.target.value
+                                          );
+                                          updateTransport(index, (draftCurrent) => ({
+                                            ...draftCurrent,
+                                            arrTime: {
+                                              ...draftCurrent.arrTime,
+                                              value: nextValue
+                                            }
+                                          }));
+                                        }}
+                                        className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                      />
+                                    </div>
+                                  </label>
+                                </div>
+                              ) : (
+                                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                  <label className="block text-xs font-semibold text-slate-500">
+                                    出発時刻
+                                    <input
+                                      value={draft.depTime.value}
+                                      onChange={(event) =>
+                                        updateTransport(index, (current) => ({
+                                          ...current,
+                                          depTime: {
+                                            ...current.depTime,
+                                            value: event.target.value
+                                          }
+                                        }))
+                                      }
+                                      placeholder="例: 2025-11-23 12:15"
+                                      className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                    />
+                                  </label>
+                                  <label className="block text-xs font-semibold text-slate-500">
+                                    到着時刻
+                                    <input
+                                      value={draft.arrTime.value}
+                                      onChange={(event) =>
+                                        updateTransport(index, (current) => ({
+                                          ...current,
+                                          arrTime: {
+                                            ...current.arrTime,
+                                            value: event.target.value
+                                          }
+                                        }))
+                                      }
+                                      placeholder="例: 2025-11-23 14:40"
+                                      className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                    />
+                                  </label>
+                                </div>
+                              )}
                               <label className="mt-3 block text-xs font-semibold text-slate-500">
                                 メモ
                                 <textarea
@@ -2139,13 +2799,15 @@ function PlanDetailContent({ user }: { user: User }) {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {hotelEdits.map((draft, index) => (
-                      <SwipeDeleteCard
-                        key={`hotel-edit-${index}`}
-                        enabled={canEdit}
-                        onDelete={() => removeHotel(index)}
-                      >
-                        <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
+                    {hotelEdits.map((draft, index) => {
+                      const linkHref = normalizeLink(draft.link.value);
+                      return (
+                        <SwipeDeleteCard
+                          key={`hotel-edit-${index}`}
+                          enabled={canEdit}
+                          onDelete={() => removeHotel(index)}
+                        >
+                          <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
                           <div className="grid gap-3 md:grid-cols-2">
                             <label className="block text-xs font-semibold text-slate-500">
                               宿泊名
@@ -2226,23 +2888,34 @@ function PlanDetailContent({ user }: { user: User }) {
                               className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                             />
                           </label>
-                          <label className="mt-3 block text-xs font-semibold text-slate-500">
-                            予約リンク
-                            <input
-                              value={draft.link.value}
-                              onChange={(event) =>
-                                updateHotel(index, (current) => ({
-                                  ...current,
-                                  link: { ...current.link, value: event.target.value }
-                                }))
-                              }
-                              placeholder="https://..."
-                              className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                            />
-                          </label>
-                        </div>
-                      </SwipeDeleteCard>
-                    ))}
+                            <label className="mt-3 block text-xs font-semibold text-slate-500">
+                              予約リンク
+                              <input
+                                value={draft.link.value}
+                                onChange={(event) =>
+                                  updateHotel(index, (current) => ({
+                                    ...current,
+                                    link: { ...current.link, value: event.target.value }
+                                  }))
+                                }
+                                placeholder="https://..."
+                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                              />
+                            </label>
+                            {linkHref ? (
+                              <a
+                                href={linkHref}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-2 inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-cardSoft transition hover:bg-slate-50"
+                              >
+                                予約リンクを開く
+                              </a>
+                            ) : null}
+                          </div>
+                        </SwipeDeleteCard>
+                      );
+                    })}
                   </div>
                 )
               ) : hotels.length === 0 ? (
@@ -2325,13 +2998,15 @@ function PlanDetailContent({ user }: { user: User }) {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {activityEdits.map((draft, index) => (
-                      <SwipeDeleteCard
-                        key={`activity-edit-${index}`}
-                        enabled={canEdit}
-                        onDelete={() => removeActivity(index)}
-                      >
-                        <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
+                    {activityEdits.map((draft, index) => {
+                      const linkHref = normalizeLink(draft.link.value);
+                      return (
+                        <SwipeDeleteCard
+                          key={`activity-edit-${index}`}
+                          enabled={canEdit}
+                          onDelete={() => removeActivity(index)}
+                        >
+                          <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
                           <div className="grid gap-3 md:grid-cols-2">
                             <label className="block text-xs font-semibold text-slate-500">
                               タイトル
@@ -2375,23 +3050,34 @@ function PlanDetailContent({ user }: { user: User }) {
                               className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                             />
                           </label>
-                          <label className="mt-3 block text-xs font-semibold text-slate-500">
-                            予約リンク
-                            <input
-                              value={draft.link.value}
-                              onChange={(event) =>
-                                updateActivity(index, (current) => ({
-                                  ...current,
-                                  link: { ...current.link, value: event.target.value }
-                                }))
-                              }
-                              placeholder="https://..."
-                              className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                            />
-                          </label>
-                        </div>
-                      </SwipeDeleteCard>
-                    ))}
+                            <label className="mt-3 block text-xs font-semibold text-slate-500">
+                              予約リンク
+                              <input
+                                value={draft.link.value}
+                                onChange={(event) =>
+                                  updateActivity(index, (current) => ({
+                                    ...current,
+                                    link: { ...current.link, value: event.target.value }
+                                  }))
+                                }
+                                placeholder="https://..."
+                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                              />
+                            </label>
+                            {linkHref ? (
+                              <a
+                                href={linkHref}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-2 inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 shadow-cardSoft transition hover:bg-slate-50"
+                              >
+                                予約リンクを開く
+                              </a>
+                            ) : null}
+                          </div>
+                        </SwipeDeleteCard>
+                      );
+                    })}
                   </div>
                 )
               ) : activities.length === 0 ? (
