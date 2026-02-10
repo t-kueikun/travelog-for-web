@@ -73,11 +73,11 @@ select {
 
 @layer utilities {
   .animate-fade-up {
-    animation: fade-up 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: fade-up 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   .animate-fade-in {
-    animation: fade-in 360ms ease-out both;
+    animation: fade-in 240ms ease-out both;
   }
 
   .animate-slide-out {

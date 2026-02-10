@@ -1,10 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode
+} from "react";
 import type { User } from "firebase/auth";
 import { useParams } from "next/navigation";
 import AuthGate from "@/components/AuthGate";
 import PageShell from "@/components/PageShell";
+import { format } from "date-fns";
 import CommentForm from "@/components/CommentForm";
 import CommentList from "@/components/CommentList";
 import {
@@ -28,10 +36,10 @@ function getPlanProgress(plan: TravelPlan) {
     Array.isArray(plan.savingsHistory)
       ? sumSavingsHistory(plan.savingsHistory)
       : typeof plan.savedAmount === "number"
-      ? plan.savedAmount
-      : typeof plan.amount === "number"
-      ? plan.amount
-      : 0;
+        ? plan.savedAmount
+        : typeof plan.amount === "number"
+          ? plan.amount
+          : 0;
   const remaining = Math.max(0, plan.totalCost - savedAmount);
   const percent =
     plan.totalCost > 0
@@ -70,6 +78,7 @@ type TransferDraft = {
 
 type TransportationDraft = {
   raw: ItemRecord;
+  id: string;
   mode: FieldDraft;
   name: FieldDraft;
   serviceName: FieldDraft;
@@ -126,42 +135,102 @@ const TRANSPORT_MODE_CONFIG: Record<
     serviceKeys?: string[];
     seatLabel?: string;
     seatKeys?: string[];
+    icon: ReactNode;
   }
 > = {
   新幹線: {
     serviceLabel: "列車名",
     serviceKeys: ["trainName", "lineName", "serviceName"],
     seatLabel: "座席番号",
-    seatKeys: ["seatNumber", "seat", "seatNo"]
+    seatKeys: ["seatNumber", "seat", "seatNo"],
+    icon: (
+      <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+      </svg>
+    ) // Placeholder, replacing with specific icons below
   },
   特急: {
     serviceLabel: "列車名",
     serviceKeys: ["trainName", "lineName", "serviceName"],
     seatLabel: "座席番号",
-    seatKeys: ["seatNumber", "seat", "seatNo"]
+    seatKeys: ["seatNumber", "seat", "seatNo"],
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+      </svg>
+    )
   },
   在来線: {
     serviceLabel: "列車名",
-    serviceKeys: ["trainName", "lineName", "serviceName"]
+    serviceKeys: ["trainName", "lineName", "serviceName"],
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+      </svg>
+    )
   },
   飛行機: {
     serviceLabel: "便番号",
     serviceKeys: ["flightNumber", "flightNo", "serviceName"],
     seatLabel: "座席番号",
-    seatKeys: ["seatNumber", "seat", "seatNo"]
+    seatKeys: ["seatNumber", "seat", "seatNo"],
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+      </svg>
+    )
   },
   バス: {
     serviceLabel: "便名",
-    serviceKeys: ["busName", "serviceName"]
+    serviceKeys: ["busName", "serviceName"],
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+      </svg>
+    )
   },
   船: {
     serviceLabel: "便名",
     serviceKeys: ["shipName", "ferryName", "serviceName"],
     seatLabel: "座席/部屋",
-    seatKeys: ["seatNumber", "cabin", "room"]
+    seatKeys: ["seatNumber", "cabin", "room"],
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+      </svg>
+    )
   },
-  車: {}
+  車: {
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+      </svg>
+    )
+  }
 };
+
+// Update icons with proper paths
+TRANSPORT_MODE_CONFIG["新幹線"].icon = (
+  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m 4,14 c 1,-4 3,-5 6,-5 1,0 2,0 2,2 l 1,2 h 6 c 2,1 3,2 3,4 v 4 H 6 V 19 l -2,-2 z M 4,17 h 4" /><circle cx="8" cy="19" r="1.5" /><circle cx="18" cy="19" r="1.5" /><path d="M 6.5,14 H 14" /></svg>
+);
+TRANSPORT_MODE_CONFIG["特急"].icon = (
+  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="16" height="16" rx="2" /><path d="M4 11h16M12 3v8m4-8v8m-8-8v8M8 19v3M16 19v3" /><path d="m 9,7 6,0" /></svg>
+);
+TRANSPORT_MODE_CONFIG["在来線"].icon = (
+  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="3" width="16" height="16" rx="2" /><path d="M4 11h16M12 3v8m4-8v8m-8-8v8M8 19v3M16 19v3" /></svg>
+);
+TRANSPORT_MODE_CONFIG["飛行機"].icon = (
+  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12h20M2 12l5-5m-5 5l5 5" style={{ display: 'none' }} /><path d="M21 14l-4 4H5l6-9H8L3 14v4l9-3 9-4z" style={{ display: 'none' }} /><path d="M2 12h20" style={{ display: 'none' }} /><path d="M20 12v3l-7-4-6 4 1-5-3-3h11l4 5z" /></svg>
+);
+TRANSPORT_MODE_CONFIG["バス"].icon = (
+  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="15" rx="2" /><path d="M5 18v3" /><path d="M19 18v3" /><path d="M3 11h18" /><path d="M3 15h18" /></svg>
+);
+TRANSPORT_MODE_CONFIG["船"].icon = (
+  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 21h20M22 21v-2c0-.6-.4-1.2-1-1.2h-1c-1.7 0-3.3-1.4-3.3-3.1V6a2 2 0 0 0-2-2H9.3a2 2 0 0 0-2 2v8.7c0 1.7-1.6 3.1-3.3 3.1H3c-.6 0-1 .6-1 1.2v2" /><path d="M9 10h6M12 6v10" /></svg>
+);
+TRANSPORT_MODE_CONFIG["車"].icon = (
+  <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2" /><circle cx="7" cy="17" r="2" /><circle cx="17" cy="17" r="2" /></svg>
+);
 const TRANSPORT_FROM_KEYS = [
   "from",
   "departure",
@@ -396,6 +465,651 @@ function formatShortDateTime(value?: Date | string | null) {
   return text || "";
 }
 
+function formatFlightDateTime(value?: string) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+}
+
+function extractDateOnly(value?: string) {
+  if (!value) {
+    return "";
+  }
+  const match = value.match(/\b(\d{4})[\/.-](\d{1,2})[\/.-](\d{1,2})\b/);
+  if (!match) {
+    return "";
+  }
+  const [, yyyy, mm, dd] = match;
+  return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+}
+
+function extractTimeOnly(value?: string) {
+  if (!value) {
+    return "";
+  }
+  const match = value.match(/\b(\d{1,2}):(\d{1,2})(?::\d{2})?\b/);
+  if (!match) {
+    return "";
+  }
+  const [, hh, mm] = match;
+  return `${hh.padStart(2, "0")}:${mm.padStart(2, "0")}`;
+}
+
+function buildDateTimeValue(datePart: string, timePart: string) {
+  const date = datePart.trim();
+  const time = timePart.trim();
+  if (date && time) {
+    return `${date} ${time}`;
+  }
+  if (date) {
+    return date;
+  }
+  if (time) {
+    return time;
+  }
+  return "";
+}
+
+function updateDateTimeValue(
+  currentValue: string,
+  nextDate?: string,
+  nextTime?: string
+) {
+  const date =
+    nextDate !== undefined ? nextDate : extractDateOnly(currentValue);
+  const time =
+    nextTime !== undefined ? nextTime : extractTimeOnly(currentValue);
+  return buildDateTimeValue(date, time);
+}
+
+function parseDateTimeForSort(value: string) {
+  if (!value) {
+    return null;
+  }
+  const date = extractDateOnly(value);
+  if (!date) {
+    return null;
+  }
+  const time = extractTimeOnly(value) || "00:00";
+  const ms = Date.parse(`${date}T${time}:00`);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function getTransportSortTime(draft: TransportationDraft) {
+  return (
+    parseDateTimeForSort(draft.depTime.value) ??
+    parseDateTimeForSort(draft.arrTime.value)
+  );
+}
+
+function getTransferSortTime(draft: TransferDraft) {
+  return (
+    parseDateTimeForSort(draft.arrTime.value) ??
+    parseDateTimeForSort(draft.depTime.value)
+  );
+}
+
+function sortTransferDrafts(drafts: TransferDraft[]) {
+  const sorted = drafts
+    .map((draft, index) => ({
+      draft,
+      index,
+      time: getTransferSortTime(draft)
+    }))
+    .sort((a, b) => {
+      if (a.time === null && b.time === null) {
+        return a.index - b.index;
+      }
+      if (a.time === null) {
+        return 1;
+      }
+      if (b.time === null) {
+        return -1;
+      }
+      if (a.time !== b.time) {
+        return a.time - b.time;
+      }
+      return a.index - b.index;
+    })
+    .map((entry) => entry.draft);
+
+  return sorted;
+}
+
+function sortTransportationDrafts(drafts: TransportationDraft[]) {
+  const sorted = drafts
+    .map((draft, index) => {
+      const sortedTransfers = sortTransferDrafts(draft.transfers);
+      return {
+        // Only recreate if transfers changed
+        draft: sortedTransfers === draft.transfers
+          ? draft
+          : { ...draft, transfers: sortedTransfers },
+        index,
+        time: getTransportSortTime(draft)
+      };
+    })
+    .sort((a, b) => {
+      if (a.time === null && b.time === null) {
+        return a.index - b.index;
+      }
+      if (a.time === null) {
+        return 1;
+      }
+      if (b.time === null) {
+        return -1;
+      }
+      if (a.time !== b.time) {
+        return a.time - b.time;
+      }
+      return a.index - b.index;
+    })
+    .map((entry) => entry.draft);
+
+  // Deep comparison to avoid unnecessary re-renders if order/content logically didn't change
+  // Note: Since we might have recreated draft objects above, we check IDs first for speed
+  const isIdOrderChanged = sorted.some((d, i) => d.id !== drafts[i].id);
+
+  if (!isIdOrderChanged) {
+    // If IDs are same order, check if any content actually changed (referential equality of inner objects)
+    const hasContentChange = sorted.some((d, i) => d !== drafts[i]);
+    if (!hasContentChange) {
+      return drafts;
+    }
+  }
+
+  return sorted;
+}
+
+function getTransportItemSortTime(item: ItemRecord) {
+  const depValue = buildDateDraft(item, TRANSPORT_DEP_KEYS).value;
+  const arrValue = buildDateDraft(item, TRANSPORT_ARR_KEYS).value;
+  return parseDateTimeForSort(depValue) ?? parseDateTimeForSort(arrValue);
+}
+
+function sortTransportItems(items: ItemRecord[]) {
+  return items
+    .map((item, index) => ({
+      item,
+      index,
+      time: getTransportItemSortTime(item)
+    }))
+    .sort((a, b) => {
+      if (a.time === null && b.time === null) {
+        return a.index - b.index;
+      }
+      if (a.time === null) {
+        return 1;
+      }
+      if (b.time === null) {
+        return -1;
+      }
+      if (a.time !== b.time) {
+        return a.time - b.time;
+      }
+      return a.index - b.index;
+    })
+    .map((entry) => entry.item);
+}
+
+function useFlipAnimation(ids: string[]) {
+  const nodesRef = useRef(new Map<string, HTMLElement>());
+  const positionsRef = useRef(new Map<string, DOMRect>());
+  const lastOrderKeyRef = useRef<string | null>(null);
+  const idsKey = ids.join("|");
+
+  useLayoutEffect(() => {
+    const nextPositions = new Map<string, DOMRect>();
+    ids.forEach((id) => {
+      const node = nodesRef.current.get(id);
+      if (node) {
+        nextPositions.set(id, node.getBoundingClientRect());
+      }
+    });
+    const shouldAnimate =
+      lastOrderKeyRef.current !== null && lastOrderKeyRef.current !== idsKey;
+    if (shouldAnimate) {
+      ids.forEach((id) => {
+        const node = nodesRef.current.get(id);
+        const prev = positionsRef.current.get(id);
+        const next = nextPositions.get(id);
+        if (!node || !prev || !next) {
+          return;
+        }
+        const dx = prev.left - next.left;
+        const dy = prev.top - next.top;
+        if (dx !== 0 || dy !== 0) {
+          node.animate(
+            [
+              { transform: `translate(${dx}px, ${dy}px)` },
+              { transform: "translate(0, 0)" }
+            ],
+            { duration: 180, easing: "cubic-bezier(0.2, 0, 0, 1)" }
+          );
+        }
+      });
+    }
+    positionsRef.current = nextPositions;
+    lastOrderKeyRef.current = idsKey;
+  }, [idsKey]);
+
+  return (id: string) => (node: HTMLElement | null) => {
+    if (node) {
+      nodesRef.current.set(id, node);
+    } else {
+      nodesRef.current.delete(id);
+    }
+  };
+}
+
+const AIRPORT_NAME_JA: Record<string, string> = {
+  HND: "羽田空港",
+  NRT: "成田国際空港",
+  KIX: "関西国際空港",
+  ITM: "大阪国際空港",
+  NGO: "中部国際空港",
+  CTS: "新千歳空港",
+  FUK: "福岡空港",
+  OKA: "那覇空港",
+  SDJ: "仙台空港",
+  HIJ: "広島空港",
+  KOJ: "鹿児島空港",
+  KMJ: "熊本空港",
+  KMI: "宮崎空港",
+  OIT: "大分空港",
+  NGS: "長崎空港",
+  HSG: "佐賀空港",
+  KKJ: "北九州空港",
+  UBJ: "山口宇部空港",
+  KMQ: "小松空港",
+  KIJ: "新潟空港",
+  OKJ: "岡山空港",
+  TKS: "徳島空港",
+  TAK: "高松空港",
+  MYJ: "松山空港",
+  KCZ: "高知空港",
+  AOJ: "青森空港",
+  AXT: "秋田空港",
+  HNA: "花巻空港",
+  MMB: "女満別空港",
+  OBO: "帯広空港",
+  KUH: "釧路空港",
+  WKJ: "稚内空港",
+  OKD: "札幌丘珠空港",
+  HKD: "函館空港",
+  UKB: "神戸空港",
+  ISG: "石垣空港",
+  MMY: "宮古空港",
+  ASJ: "奄美空港",
+  TKN: "徳之島空港",
+  UEO: "久米島空港",
+  OGN: "与那国空港",
+  RNJ: "与論空港",
+  RIS: "利尻空港",
+  FUJ: "福江空港",
+  TSJ: "対馬空港",
+  IKI: "壱岐空港",
+  ICN: "仁川国際空港",
+  GMP: "金浦国際空港",
+  PEK: "北京首都国際空港",
+  PKX: "北京大興国際空港",
+  PVG: "上海浦東国際空港",
+  SHA: "上海虹橋国際空港",
+  HKG: "香港国際空港",
+  TPE: "台湾桃園国際空港",
+  TSA: "台北松山空港",
+  SIN: "シンガポール・チャンギ空港",
+  BKK: "スワンナプーム国際空港",
+  DMK: "ドンムアン空港",
+  KUL: "クアラルンプール国際空港",
+  CGK: "スカルノ・ハッタ国際空港",
+  MNL: "ニノイ・アキノ国際空港",
+  HAN: "ノイバイ国際空港",
+  SGN: "タンソンニャット国際空港",
+  DPS: "ングラ・ライ国際空港",
+  DEL: "インディラ・ガンディー国際空港",
+  BOM: "チャトラパティ・シヴァージー国際空港",
+  BLR: "ケンペゴウダ国際空港",
+  HYD: "ラジーヴ・ガンディー国際空港",
+  DXB: "ドバイ国際空港",
+  AUH: "アブダビ国際空港",
+  DOH: "ハマド国際空港",
+  JED: "キング・アブドゥルアズィーズ国際空港",
+  RUH: "キング・ハーリド国際空港",
+  LHR: "ロンドン・ヒースロー空港",
+  LGW: "ロンドン・ガトウィック空港",
+  CDG: "パリ＝シャルル・ド・ゴール空港",
+  ORY: "パリ＝オルリー空港",
+  AMS: "アムステルダム・スキポール空港",
+  FRA: "フランクフルト空港",
+  MUC: "ミュンヘン空港",
+  ZRH: "チューリッヒ空港",
+  VIE: "ウィーン国際空港",
+  MAD: "マドリード＝バラハス空港",
+  BCN: "バルセロナ＝エル・プラット空港",
+  FCO: "ローマ・フィウミチーノ空港",
+  MXP: "ミラノ・マルペンサ空港",
+  DUB: "ダブリン空港",
+  ARN: "ストックホルム・アーランダ空港",
+  CPH: "コペンハーゲン空港",
+  OSL: "オスロ・ガーデモエン空港",
+  HEL: "ヘルシンキ・ヴァンター空港",
+  IST: "イスタンブール空港",
+  SAW: "サビハ・ギョクチェン国際空港",
+  YYZ: "トロント・ピアソン国際空港",
+  YVR: "バンクーバー国際空港",
+  YUL: "モントリオール・トルドー国際空港",
+  JFK: "ジョン・F・ケネディ国際空港",
+  EWR: "ニューアーク・リバティ国際空港",
+  LGA: "ラガーディア空港",
+  ORD: "シカゴ・オヘア国際空港",
+  ATL: "ハーツフィールド・ジャクソン・アトランタ国際空港",
+  DFW: "ダラス・フォートワース国際空港",
+  DEN: "デンバー国際空港",
+  SEA: "シアトル・タコマ国際空港",
+  SFO: "サンフランシスコ国際空港",
+  LAX: "ロサンゼルス国際空港",
+  LAS: "ハリー・リード国際空港",
+  PHX: "フェニックス・スカイハーバー国際空港",
+  MIA: "マイアミ国際空港",
+  IAD: "ワシントン・ダレス国際空港",
+  IAH: "ジョージ・ブッシュ・インターコンチネンタル空港",
+  BOS: "ローガン国際空港",
+  SYD: "シドニー国際空港",
+  MEL: "メルボルン空港",
+  BNE: "ブリスベン空港",
+  AKL: "オークランド国際空港"
+};
+
+const CITY_TO_AIRPORT_JA: Record<string, { code: string; name: string }> = {
+  Tokyo: { code: "HND", name: "羽田空港" },
+  "東京": { code: "HND", name: "羽田空港" },
+  Osaka: { code: "KIX", name: "関西国際空港" },
+  "大阪": { code: "KIX", name: "関西国際空港" },
+  Sapporo: { code: "CTS", name: "新千歳空港" },
+  "札幌": { code: "CTS", name: "新千歳空港" },
+  Seoul: { code: "ICN", name: "仁川国際空港" },
+  Incheon: { code: "ICN", name: "仁川国際空港" },
+  "ソウル": { code: "ICN", name: "仁川国際空港" },
+  "仁川": { code: "ICN", name: "仁川国際空港" },
+  London: { code: "LHR", name: "ロンドン・ヒースロー空港" },
+  Paris: { code: "CDG", name: "パリ＝シャルル・ド・ゴール空港" },
+  Amsterdam: { code: "AMS", name: "アムステルダム・スキポール空港" },
+  Frankfurt: { code: "FRA", name: "フランクフルト空港" },
+  Munich: { code: "MUC", name: "ミュンヘン空港" },
+  Zurich: { code: "ZRH", name: "チューリッヒ空港" },
+  Vienna: { code: "VIE", name: "ウィーン国際空港" },
+  Madrid: { code: "MAD", name: "マドリード＝バラハス空港" },
+  Barcelona: { code: "BCN", name: "バルセロナ＝エル・プラット空港" },
+  Rome: { code: "FCO", name: "ローマ・フィウミチーノ空港" },
+  Milan: { code: "MXP", name: "ミラノ・マルペンサ空港" },
+  Dublin: { code: "DUB", name: "ダブリン空港" },
+  Stockholm: { code: "ARN", name: "ストックホルム・アーランダ空港" },
+  Copenhagen: { code: "CPH", name: "コペンハーゲン空港" },
+  Oslo: { code: "OSL", name: "オスロ・ガーデモエン空港" },
+  Helsinki: { code: "HEL", name: "ヘルシンキ・ヴァンター空港" },
+  Istanbul: { code: "IST", name: "イスタンブール空港" },
+  Toronto: { code: "YYZ", name: "トロント・ピアソン国際空港" },
+  Vancouver: { code: "YVR", name: "バンクーバー国際空港" },
+  Montreal: { code: "YUL", name: "モントリオール・トルドー国際空港" },
+  "New York": { code: "JFK", name: "ジョン・F・ケネディ国際空港" },
+  "Los Angeles": { code: "LAX", name: "ロサンゼルス国際空港" },
+  "San Francisco": { code: "SFO", name: "サンフランシスコ国際空港" },
+  "Seattle": { code: "SEA", name: "シアトル・タコマ国際空港" },
+  Chicago: { code: "ORD", name: "シカゴ・オヘア国際空港" },
+  Atlanta: { code: "ATL", name: "ハーツフィールド・ジャクソン・アトランタ国際空港" },
+  Dallas: { code: "DFW", name: "ダラス・フォートワース国際空港" },
+  Denver: { code: "DEN", name: "デンバー国際空港" },
+  Miami: { code: "MIA", name: "マイアミ国際空港" },
+  Washington: { code: "IAD", name: "ワシントン・ダレス国際空港" },
+  Boston: { code: "BOS", name: "ローガン国際空港" },
+  Sydney: { code: "SYD", name: "シドニー国際空港" },
+  Melbourne: { code: "MEL", name: "メルボルン空港" },
+  Brisbane: { code: "BNE", name: "ブリスベン空港" },
+  Auckland: { code: "AKL", name: "オークランド国際空港" },
+  Beijing: { code: "PEK", name: "北京首都国際空港" },
+  Shanghai: { code: "PVG", name: "上海浦東国際空港" },
+  "Hong Kong": { code: "HKG", name: "香港国際空港" },
+  Taipei: { code: "TPE", name: "台湾桃園国際空港" },
+  Singapore: { code: "SIN", name: "シンガポール・チャンギ空港" },
+  Bangkok: { code: "BKK", name: "スワンナプーム国際空港" },
+  Manila: { code: "MNL", name: "ニノイ・アキノ国際空港" },
+  Delhi: { code: "DEL", name: "インディラ・ガンディー国際空港" },
+  Mumbai: { code: "BOM", name: "チャトラパティ・シヴァージー国際空港" },
+  Dubai: { code: "DXB", name: "ドバイ国際空港" },
+  Doha: { code: "DOH", name: "ハマド国際空港" }
+};
+
+const CITY_CODE_TO_AIRPORT: Record<string, { code: string; name: string }> = {
+  TYO: { code: "HND", name: "羽田空港" },
+  OSA: { code: "KIX", name: "関西国際空港" },
+  NYC: { code: "JFK", name: "ジョン・F・ケネディ国際空港" },
+  LON: { code: "LHR", name: "ロンドン・ヒースロー空港" },
+  PAR: { code: "CDG", name: "パリ＝シャルル・ド・ゴール空港" }
+};
+
+function pickFirstString(values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === "string") {
+      const text = value.trim();
+      if (text) {
+        return text;
+      }
+    }
+  }
+  return "";
+}
+
+function extractIataFromText(text: string) {
+  const match = text.match(/\b([A-Z0-9]{3})\b/);
+  return match ? match[1].toUpperCase() : "";
+}
+
+function resolveCityAirport(name: string, code: string) {
+  if (name) {
+    const mapped = CITY_TO_AIRPORT_JA[name] ?? CITY_TO_AIRPORT_JA[name.trim()];
+    if (mapped) {
+      return mapped;
+    }
+  }
+  if (code) {
+    const mapped = CITY_CODE_TO_AIRPORT[code];
+    if (mapped) {
+      return mapped;
+    }
+  }
+  return null;
+}
+
+function normalizeAirport(value: unknown) {
+  if (!value) {
+    return "";
+  }
+  let name = "";
+  let code = "";
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) {
+      return "";
+    }
+    code = extractIataFromText(text);
+    if (!code || text.toUpperCase() !== code) {
+      name = text;
+    }
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const airport =
+      record.airport && typeof record.airport === "object"
+        ? (record.airport as Record<string, unknown>)
+        : null;
+    name = pickFirstString([
+      airport?.name,
+      airport?.airportName,
+      record.name,
+      record.airportName,
+      record.fullName,
+      record.shortName,
+      record.municipalityName,
+      record.city,
+      record.locationName,
+      record.airport
+    ]);
+    code = pickFirstString([
+      airport?.iata,
+      airport?.iataCode,
+      airport?.code,
+      record.iata,
+      record.iataCode,
+      record.code,
+      airport?.icao,
+      record.icao,
+      record.airportCode,
+      record.airportIata,
+      record.airportIataCode,
+      record.airportIcao
+    ]).toUpperCase();
+  }
+  if (!code && name) {
+    code = extractIataFromText(name);
+  }
+  if (!code && !name) {
+    return "";
+  }
+  const cityMapped = resolveCityAirport(name, code);
+  const jpName = code ? AIRPORT_NAME_JA[code] : "";
+  const displayName = cityMapped?.name || jpName || name;
+  const displayCode = cityMapped?.code || code;
+  if (displayName && displayCode) {
+    return `${displayName} (${displayCode})`;
+  }
+  if (displayName) {
+    return displayName;
+  }
+  return displayCode;
+}
+
+function normalizeTime(value: unknown): string {
+  if (!value) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === "number") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const direct = pickFirstString([
+      record.local,
+      record.localTime,
+      record.scheduledTimeLocal,
+      record.scheduledTime,
+      record.scheduledTimeUtc,
+      record.utc,
+      record.time,
+      record.timeLocal,
+      record.timeUtc,
+      record.dateTime,
+      record.dateTimeLocal,
+      record.dateTimeUtc
+    ]);
+    if (direct) {
+      return direct;
+    }
+    const nested =
+      normalizeTime(record.local) ||
+      normalizeTime(record.utc) ||
+      normalizeTime(record.scheduledTimeLocal) ||
+      normalizeTime(record.scheduledTimeUtc) ||
+      normalizeTime(record.time);
+    if (nested) {
+      return nested;
+    }
+  }
+  return "";
+}
+
+function pickTime(values: unknown[]) {
+  for (const value of values) {
+    const normalized = normalizeTime(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return "";
+}
+
+function extractFlightInfo(payload: unknown) {
+  const data = payload as Record<string, unknown>;
+  const raw = Array.isArray(data?.data)
+    ? data.data[0]
+    : ((data?.data as Record<string, unknown>)?.flights as any[])?.[0] ??
+    (data?.data as Record<string, unknown>) ??
+    data;
+  const record = raw as Record<string, unknown> | undefined;
+  const departure = (record?.departure ??
+    (record?.departures as Record<string, unknown>[] | undefined)?.[0] ??
+    record?.departureAirport) as Record<string, unknown> | undefined;
+  const arrival = (record?.arrival ??
+    (record?.arrivals as Record<string, unknown>[] | undefined)?.[0] ??
+    record?.arrivalAirport) as Record<string, unknown> | undefined;
+
+  const departureAirport = normalizeAirport(departure);
+  const arrivalAirport = normalizeAirport(arrival);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const depAny = departure as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const arrAny = arrival as any;
+
+  const departureTime =
+    pickTime([
+      departure?.scheduledTimeLocal,
+      depAny?.scheduledTime?.local,
+      depAny?.scheduledTime?.utc,
+      departure?.scheduledTime,
+      departure?.scheduledTimeUtc,
+      departure?.time,
+      record?.departureTime,
+      record?.departureTimeUtc,
+      record?.departureTimeLocal
+    ]) || "";
+  const arrivalTime =
+    pickTime([
+      arrival?.scheduledTimeLocal,
+      arrAny?.scheduledTime?.local,
+      arrAny?.scheduledTime?.utc,
+      arrival?.scheduledTime,
+      arrival?.scheduledTimeUtc,
+      arrival?.time,
+      record?.arrivalTime,
+      record?.arrivalTimeUtc,
+      record?.arrivalTimeLocal
+    ]) || "";
+
+  return {
+    departureAirport,
+    arrivalAirport,
+    departureTime,
+    arrivalTime
+  };
+}
+
 function resolveKey(item: ItemRecord, keys: string[], patterns: string[] = []) {
   for (const key of keys) {
     if (key in item) {
@@ -506,6 +1220,8 @@ function buildBooleanDraft(
 function buildTransportationDrafts(items: ItemRecord[]) {
   return items.map((raw) => {
     const item = raw && typeof raw === "object" ? raw : {};
+    const existingId = typeof item.id === "string" ? item.id : "";
+    const id = existingId.trim() ? existingId : createDraftId();
     const mode = buildModeDraft(item);
     const config = getModeConfig(mode.value);
     const serviceKeys = config.serviceKeys ?? [];
@@ -513,6 +1229,7 @@ function buildTransportationDrafts(items: ItemRecord[]) {
     const transfers = Array.isArray(item.transfers) ? item.transfers : [];
     return {
       raw: item,
+      id,
       mode,
       name: buildStringDraft(item, TRANSPORT_NAME_KEYS),
       serviceName: serviceKeys.length
@@ -582,8 +1299,8 @@ function buildSavingsDrafts(items: Array<number | { amount?: number }>) {
       typeof raw === "number"
         ? raw
         : typeof (raw as { amount?: number }).amount === "number"
-        ? (raw as { amount?: number }).amount
-        : null;
+          ? (raw as { amount?: number }).amount
+          : null;
     const text = typeof value === "number" ? String(value) : "";
     return {
       raw,
@@ -644,7 +1361,7 @@ function applyTransferDrafts(drafts: TransferDraft[]) {
 
 function applyTransportationDrafts(drafts: TransportationDraft[]) {
   return drafts.map((draft) => {
-    const nextItem: ItemRecord = { ...draft.raw };
+    const nextItem: ItemRecord = { ...draft.raw, id: draft.id };
     applyStringDraft(nextItem, draft.mode);
     applyStringDraft(nextItem, draft.name);
     applyStringDraft(nextItem, draft.serviceName);
@@ -890,9 +1607,8 @@ function SwipeDeleteCard({
 
   return (
     <div
-      className={`relative overflow-hidden rounded-2xl ${
-        isDeleting ? "pointer-events-none animate-slide-out" : ""
-      }`}
+      className={`relative overflow-hidden rounded-2xl ${isDeleting ? "pointer-events-none animate-slide-out" : ""
+        }`}
     >
       <div
         className="pointer-events-none absolute inset-0 rounded-2xl bg-rose-500"
@@ -933,6 +1649,7 @@ function PlanDetailContent({ user }: { user: User }) {
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const transportSortTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedRef = useRef<string | null>(null);
   const skipApplyRef = useRef(false);
   const [editValues, setEditValues] = useState({
@@ -948,6 +1665,9 @@ function PlanDetailContent({ user }: { user: User }) {
   const [activityEdits, setActivityEdits] = useState<ActivityDraft[]>([]);
   const [packingEdits, setPackingEdits] = useState<PackingDraft[]>([]);
   const [savingsEdits, setSavingsEdits] = useState<SavingsDraft[]>([]);
+  const [flightFetchingId, setFlightFetchingId] = useState<string | null>(null);
+  const [flightFetchError, setFlightFetchError] = useState<string | null>(null);
+  const [flightFetchErrorId, setFlightFetchErrorId] = useState<string | null>(null);
 
   const applyPlanToEdits = (current: TravelPlan) => {
     setEditValues({
@@ -967,7 +1687,7 @@ function PlanDetailContent({ user }: { user: User }) {
     const savingsHistory = Array.isArray(current.savingsHistory)
       ? current.savingsHistory
       : [];
-    setTransportEdits(buildTransportationDrafts(transportations));
+    setTransportEdits(sortTransportationDrafts(buildTransportationDrafts(transportations)));
     setHotelEdits(buildHotelDrafts(hotels));
     setActivityEdits(buildActivityDrafts(activities));
     setPackingEdits(buildPackingDrafts(packingList));
@@ -976,11 +1696,47 @@ function PlanDetailContent({ user }: { user: User }) {
 
   const updateTransport = (
     index: number,
-    updater: (draft: TransportationDraft) => TransportationDraft
+    updater: (draft: TransportationDraft) => TransportationDraft,
+    options?: { sort?: boolean }
   ) => {
-    setTransportEdits((prev) =>
-      prev.map((draft, i) => (i === index ? updater(draft) : draft))
-    );
+    setTransportEdits((prev) => {
+      const next = prev.map((draft, i) => (i === index ? updater(draft) : draft));
+      if (options?.sort) {
+        return sortTransportationDrafts(next);
+      }
+      return next;
+    });
+  };
+
+  const updateTransportById = (
+    id: string,
+    updater: (draft: TransportationDraft) => TransportationDraft,
+    options?: { sort?: boolean }
+  ) => {
+    setTransportEdits((prev) => {
+      const next = prev.map((draft) => (draft.id === id ? updater(draft) : draft));
+      if (options?.sort) {
+        return sortTransportationDrafts(next);
+      }
+      return next;
+    });
+  };
+
+  const scheduleTransportSort = () => {
+    if (transportSortTimerRef.current) {
+      clearTimeout(transportSortTimerRef.current);
+    }
+    transportSortTimerRef.current = setTimeout(() => {
+      setTransportEdits((prev) => sortTransportationDrafts(prev));
+    }, 1);
+  };
+
+  const handleTransportSortBlur = (event: React.FocusEvent<HTMLElement>) => {
+    const next = event.relatedTarget as Node | null;
+    if (next && event.currentTarget.contains(next)) {
+      return;
+    }
+    scheduleTransportSort();
   };
 
   const updateHotel = (index: number, updater: (draft: HotelDraft) => HotelDraft) => {
@@ -1016,7 +1772,9 @@ function PlanDetailContent({ user }: { user: User }) {
     );
   };
   const removeTransport = (index: number) => {
-    setTransportEdits((prev) => prev.filter((_, i) => i !== index));
+    setTransportEdits((prev) =>
+      sortTransportationDrafts(prev.filter((_, i) => i !== index))
+    );
   };
   const removeHotel = (index: number) => {
     setHotelEdits((prev) => prev.filter((_, i) => i !== index));
@@ -1029,6 +1787,88 @@ function PlanDetailContent({ user }: { user: User }) {
   };
   const removeSavings = (index: number) => {
     setSavingsEdits((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const fetchFlightInfo = async (transportId: string) => {
+    const draft = transportEdits.find((item) => item.id === transportId);
+    if (!draft) {
+      return;
+    }
+    const flightNumber = draft.serviceName.value.trim();
+    if (!flightNumber) {
+      setFlightFetchError("便番号を入力してください。");
+      setFlightFetchErrorId(transportId);
+      return;
+    }
+    const date =
+      extractDateOnly(draft.depTime.value) ||
+      extractDateOnly(editValues.startDate) ||
+      new Date().toISOString().slice(0, 10);
+
+    setFlightFetchingId(transportId);
+    setFlightFetchError(null);
+    setFlightFetchErrorId(null);
+    try {
+      const response = await fetch(
+        `/api/aerodatabox?flight=${encodeURIComponent(
+          flightNumber
+        )}&date=${encodeURIComponent(date)}`
+      );
+      if (!response.ok) {
+        throw new Error("fetch_failed");
+      }
+      const payload = await response.json();
+      const info = extractFlightInfo(payload);
+      if (
+        !info.departureAirport &&
+        !info.arrivalAirport &&
+        !info.departureTime &&
+        !info.arrivalTime
+      ) {
+        setFlightFetchError("便情報が見つかりませんでした。");
+        setFlightFetchErrorId(transportId);
+        return;
+      }
+
+      updateTransportById(transportId, (current) => {
+        const departureTimeOnly = info.departureTime
+          ? extractTimeOnly(info.departureTime)
+          : "";
+        const arrivalTimeOnly = info.arrivalTime
+          ? extractTimeOnly(info.arrivalTime)
+          : "";
+        return {
+          ...current,
+          from: {
+            ...current.from,
+            value: info.departureAirport || current.from.value
+          },
+          to: {
+            ...current.to,
+            value: info.arrivalAirport || current.to.value
+          },
+          depTime: {
+            ...current.depTime,
+            value: departureTimeOnly
+              ? updateDateTimeValue(current.depTime.value, undefined, departureTimeOnly)
+              : current.depTime.value
+          },
+          arrTime: {
+            ...current.arrTime,
+            value: arrivalTimeOnly
+              ? updateDateTimeValue(current.arrTime.value, undefined, arrivalTimeOnly)
+              : current.arrTime.value
+          }
+        };
+      });
+      scheduleTransportSort();
+    } catch (error) {
+      setFlightFetchError("便情報の取得に失敗しました。");
+      setFlightFetchErrorId(transportId);
+      console.error(error);
+    } finally {
+      setFlightFetchingId(null);
+    }
   };
 
   const buildAutoSaveUpdates = () => {
@@ -1095,7 +1935,7 @@ function PlanDetailContent({ user }: { user: User }) {
       if (modeValue === "在来線") {
         item.transfers = [];
       }
-      return [...prev, ...buildTransportationDrafts([item])];
+      return sortTransportationDrafts([...prev, ...buildTransportationDrafts([item])]);
     });
   };
 
@@ -1221,10 +2061,10 @@ function PlanDetailContent({ user }: { user: User }) {
     Array.isArray(plan?.savingsHistory) && plan.savingsHistory.length > 0
       ? sumSavingsHistory(plan.savingsHistory)
       : typeof plan?.savedAmount === "number"
-      ? plan.savedAmount
-      : typeof plan?.amount === "number"
-      ? plan.amount
-      : 0;
+        ? plan.savedAmount
+        : typeof plan?.amount === "number"
+          ? plan.amount
+          : 0;
   const ownsByPath =
     typeof plan?.path === "string" &&
     (plan.path.startsWith(`users/${user.uid}/travelPlans/`) ||
@@ -1258,8 +2098,8 @@ function PlanDetailContent({ user }: { user: User }) {
   const totalCost = canEdit
     ? computedTotalCost
     : typeof plan?.totalCost === "number"
-    ? plan.totalCost
-    : null;
+      ? plan.totalCost
+      : null;
   const remainingCost =
     totalCost !== null ? Math.max(0, totalCost - savedTotal) : null;
   const transportations = Array.isArray(plan?.transportations)
@@ -1269,12 +2109,18 @@ function PlanDetailContent({ user }: { user: User }) {
   const activities = Array.isArray(plan?.activities) ? plan.activities : [];
   const packingList = Array.isArray(plan?.packingList) ? plan.packingList : [];
   const hasEditError = Boolean(editError);
+  const transportIds = transportEdits.map((draft) => draft.id);
+  const transportCardRef = useFlipAnimation(transportIds);
+  const sortedTransportations = useMemo(
+    () => sortTransportItems(transportations),
+    [transportations]
+  );
 
   const progress = plan
     ? getPlanProgress({
-        ...plan,
-        totalCost: typeof totalCost === "number" ? totalCost : plan.totalCost
-      })
+      ...plan,
+      totalCost: typeof totalCost === "number" ? totalCost : plan.totalCost
+    })
     : null;
 
   useEffect(() => {
@@ -1510,10 +2356,10 @@ function PlanDetailContent({ user }: { user: User }) {
                       {saving || autoSaveState === "saving"
                         ? "自動保存中..."
                         : autoSaveState === "error"
-                        ? "自動保存エラー"
-                        : autoSaveState === "saved"
-                        ? "保存済み"
-                        : "自動保存"}
+                          ? "自動保存エラー"
+                          : autoSaveState === "saved"
+                            ? "保存済み"
+                            : "自動保存"}
                     </span>
                     <button
                       type="button"
@@ -1570,416 +2416,632 @@ function PlanDetailContent({ user }: { user: User }) {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {transportEdits.map((draft, index) => (
-                      <SwipeDeleteCard
-                        key={`transport-edit-${index}`}
-                        enabled={canEdit}
-                        onDelete={() => removeTransport(index)}
-                      >
-                        <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
-                          <div className="mb-4">
-                            <p className="text-xs font-semibold text-slate-500">
-                              移動手段の種類
-                            </p>
-                            <div className="mt-2 flex flex-wrap gap-2 rounded-2xl bg-slate-100 p-2">
-                              {TRANSPORT_MODES.map((mode) => {
-                                const selected = draft.mode.value === mode;
-                                return (
-                                  <button
-                                    key={`${mode}-${index}`}
-                                    type="button"
-                                    onClick={() =>
-                                      updateTransport(index, (current) => {
-                                        if (current.mode.value === mode) {
-                                          return current;
-                                        }
-                                        const config = getModeConfig(mode);
-                                        const serviceKey = config.serviceKeys?.[0] ?? "";
-                                        const seatKey = config.seatKeys?.[0] ?? "";
-                                        const nextRaw = { ...current.raw };
-                                        if (mode !== "在来線") {
-                                          delete nextRaw.transfers;
-                                        }
-                                        return {
-                                          ...current,
-                                          raw: nextRaw,
-                                          mode: { ...current.mode, value: mode },
-                                          serviceName: {
-                                            key: serviceKey,
-                                            value: "",
-                                            original: ""
-                                          },
-                                          seatNumber: {
-                                            key: seatKey,
-                                            value: "",
-                                            original: ""
-                                          },
-                                          transfers:
-                                            mode === "在来線" ? current.transfers : []
-                                        };
-                                      })
-                                    }
-                                    className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-                                      selected
-                                        ? "bg-white text-slate-900 shadow-sm"
-                                        : "text-slate-500 hover:text-slate-700"
-                                    }`}
-                                  >
-                                    {mode}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                          {draft.mode.value === "在来線" ? (
-                            <>
-                              <label className="block text-xs font-semibold text-slate-500">
-                                金額
-                                <input
-                                  type="number"
-                                  inputMode="numeric"
-                                  value={draft.price.value}
-                                  onChange={(event) =>
-                                    updateTransport(index, (current) => ({
-                                      ...current,
-                                      price: {
-                                        ...current.price,
-                                        value: event.target.value
-                                      }
-                                    }))
-                                  }
-                                  className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                />
-                              </label>
-                              <div className="mt-4 space-y-3">
-                              <div className="flex items-center justify-between">
+                    {transportEdits.map((draft, index) => {
+                      const depDate = extractDateOnly(draft.depTime.value);
+                      const depTime = extractTimeOnly(draft.depTime.value);
+                      const arrDate = extractDateOnly(draft.arrTime.value);
+                      const arrTime = extractTimeOnly(draft.arrTime.value);
+                      return (
+                        <div
+                          key={draft.id}
+                          ref={transportCardRef(draft.id)}
+                          className="will-change-transform"
+                        >
+                          <SwipeDeleteCard
+                            enabled={canEdit}
+                            onDelete={() => removeTransport(index)}
+                          >
+                            <div
+                              className="rounded-2xl bg-white p-4 shadow-cardSoft"
+                              onBlur={handleTransportSortBlur}
+                            >
+                              <div className="mb-4">
                                 <p className="text-xs font-semibold text-slate-500">
-                                  乗換駅
+                                  移動手段の種類
                                 </p>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    updateTransport(index, (current) => ({
-                                      ...current,
-                                      transfers: [
-                                        ...current.transfers,
-                                        ...buildTransferDrafts([
-                                          {
-                                            id: createDraftId(),
-                                            station: "",
-                                            arrivalTime: "",
-                                            departureTime: ""
-                                          }
-                                        ])
-                                      ]
-                                    }))
-                                  }
-                                  className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600"
-                                >
-                                  乗換を追加
-                                </button>
-                              </div>
-                              {draft.transfers.length === 0 ? (
-                                <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">
-                                  まだ乗換駅がありません。
-                                </div>
-                              ) : (
-                                <div className="space-y-2">
-                                  {draft.transfers.map((transfer, transferIndex) => (
-                                    <div
-                                      key={`${transfer.id}-${transferIndex}`}
-                                      className="rounded-xl border border-slate-100 bg-slate-50 p-3"
-                                    >
-                                      <div className="flex items-center justify-between">
-                                        <span className="text-xs font-semibold text-slate-500">
-                                          乗換 {transferIndex + 1}
-                                        </span>
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            updateTransport(index, (current) => ({
-                                              ...current,
-                                              transfers: current.transfers.filter(
-                                                (_, idx) => idx !== transferIndex
-                                              )
-                                            }))
-                                          }
-                                          className="text-xs font-semibold text-rose-500"
-                                        >
-                                          削除
-                                        </button>
-                                      </div>
-                                      <div className="mt-2 grid gap-3 md:grid-cols-2">
-                                        <label className="block text-xs font-semibold text-slate-500">
-                                          駅名
-                                          <input
-                                            value={transfer.station.value}
-                                            onChange={(event) =>
-                                              updateTransport(index, (current) => ({
-                                                ...current,
-                                                transfers: current.transfers.map(
-                                                  (item, idx) =>
-                                                    idx === transferIndex
-                                                      ? {
-                                                          ...item,
-                                                          station: {
-                                                            ...item.station,
-                                                            value: event.target.value
-                                                          }
-                                                        }
-                                                      : item
-                                                )
-                                              }))
+                                <div className="mt-3 grid grid-cols-4 gap-2 sm:grid-cols-7">
+                                  {TRANSPORT_MODES.map((mode) => {
+                                    const selected = draft.mode.value === mode;
+                                    return (
+                                      <button
+                                        key={`${mode}-${index}`}
+                                        type="button"
+                                        onClick={() =>
+                                          updateTransport(index, (current) => {
+                                            if (current.mode.value === mode) {
+                                              return current;
                                             }
-                                            className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                                          />
-                                        </label>
-                                        <label className="block text-xs font-semibold text-slate-500">
-                                          到着時刻
-                                          <input
-                                            value={transfer.arrTime.value}
-                                            onChange={(event) =>
-                                              updateTransport(index, (current) => ({
-                                                ...current,
-                                                transfers: current.transfers.map(
-                                                  (item, idx) =>
-                                                    idx === transferIndex
-                                                      ? {
-                                                          ...item,
-                                                          arrTime: {
-                                                            ...item.arrTime,
-                                                            value: event.target.value
-                                                          }
-                                                        }
-                                                      : item
-                                                )
-                                              }))
+                                            const config = getModeConfig(mode);
+                                            const serviceKey = config.serviceKeys?.[0] ?? "";
+                                            const seatKey = config.seatKeys?.[0] ?? "";
+                                            const nextRaw = { ...current.raw };
+                                            if (mode !== "在来線") {
+                                              delete nextRaw.transfers;
                                             }
-                                            placeholder="例: 2026-01-11 21:50"
-                                            className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                                          />
-                                        </label>
-                                      </div>
-                                      <label className="mt-3 block text-xs font-semibold text-slate-500">
-                                        出発時刻
-                                        <input
-                                          value={transfer.depTime.value}
-                                          onChange={(event) =>
-                                            updateTransport(index, (current) => ({
+                                            return {
                                               ...current,
-                                              transfers: current.transfers.map(
-                                                (item, idx) =>
-                                                  idx === transferIndex
-                                                    ? {
-                                                        ...item,
-                                                        depTime: {
-                                                          ...item.depTime,
-                                                          value: event.target.value
-                                                        }
-                                                      }
-                                                    : item
-                                              )
-                                            }))
-                                          }
-                                          placeholder="例: 2026-01-11 21:50"
-                                          className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                                        />
-                                      </label>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              {(() => {
-                                const modeConfig = getModeConfig(draft.mode.value);
-                                const hasService = Boolean(modeConfig.serviceLabel);
-                                const hasSeat = Boolean(modeConfig.seatLabel);
-                                return hasService || hasSeat ? (
-                                  <div className="mb-3 grid gap-3 md:grid-cols-2">
-                                    {hasService ? (
-                                      <label className="block text-xs font-semibold text-slate-500">
-                                        {modeConfig.serviceLabel}
-                                        <input
-                                          value={draft.serviceName.value}
-                                          onChange={(event) =>
-                                            updateTransport(index, (current) => ({
-                                              ...current,
+                                              raw: nextRaw,
+                                              mode: { ...current.mode, value: mode },
                                               serviceName: {
-                                                ...current.serviceName,
-                                                value: event.target.value
-                                              }
-                                            }))
-                                          }
-                                          className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                        />
-                                      </label>
-                                    ) : null}
-                                    {hasSeat ? (
-                                      <label className="block text-xs font-semibold text-slate-500">
-                                        {modeConfig.seatLabel}
-                                        <input
-                                          value={draft.seatNumber.value}
-                                          onChange={(event) =>
-                                            updateTransport(index, (current) => ({
-                                              ...current,
+                                                key: serviceKey,
+                                                value: "",
+                                                original: ""
+                                              },
                                               seatNumber: {
-                                                ...current.seatNumber,
-                                                value: event.target.value
-                                              }
-                                            }))
+                                                key: seatKey,
+                                                value: "",
+                                                original: ""
+                                              },
+                                              transfers:
+                                                mode === "在来線" ? current.transfers : []
+                                            };
+                                          })
+                                        }
+                                        className={`flex flex-col items-center justify-center gap-1 rounded-xl py-2 px-3 text-xs font-bold transition-all ${selected
+                                          ? "bg-slate-900 text-white shadow-md scale-[1.02]"
+                                          : "bg-slate-50 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                                          }`}
+                                      >
+                                        {mode}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                              {draft.mode.value === "在来線" ? (
+                                <>
+                                  <label className="block text-xs font-semibold text-slate-500">
+                                    金額
+                                    <input
+                                      type="number"
+                                      inputMode="numeric"
+                                      value={draft.price.value}
+                                      onChange={(event) =>
+                                        updateTransport(index, (current) => ({
+                                          ...current,
+                                          price: {
+                                            ...current.price,
+                                            value: event.target.value
                                           }
-                                          className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                        />
-                                      </label>
-                                    ) : null}
+                                        }))
+                                      }
+                                      className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                    />
+                                  </label>
+                                  <div className="mt-4 space-y-3">
+                                    <div className="flex items-center justify-between">
+                                      <p className="text-xs font-semibold text-slate-500">
+                                        乗換駅
+                                      </p>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          updateTransport(index, (current) => ({
+                                            ...current,
+                                            transfers: [
+                                              ...current.transfers,
+                                              ...buildTransferDrafts([
+                                                {
+                                                  id: createDraftId(),
+                                                  station: "",
+                                                  arrivalTime: "",
+                                                  departureTime: ""
+                                                }
+                                              ])
+                                            ]
+                                          }))
+                                        }
+                                        className="flex items-center gap-1 rounded-full bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-600 transition-colors hover:bg-blue-100"
+                                      >
+                                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
+                                        乗換を追加
+                                      </button>
+                                    </div>
+                                    {draft.transfers.length === 0 ? (
+                                      <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                                        まだ乗換駅がありません。
+                                      </div>
+                                    ) : (
+                                      <div className="space-y-2">
+                                        {draft.transfers.map((transfer, transferIndex) => {
+                                          const transferArrDate = extractDateOnly(transfer.arrTime.value);
+                                          const transferArrTime = extractTimeOnly(transfer.arrTime.value);
+                                          const transferDepDate = extractDateOnly(transfer.depTime.value);
+                                          const transferDepTime = extractTimeOnly(transfer.depTime.value);
+                                          return (
+                                            <div
+                                              key={`${transfer.id}-${transferIndex}`}
+                                              className="rounded-xl border border-slate-100 bg-slate-50 p-3"
+                                            >
+                                              <div className="flex items-center justify-between">
+                                                <span className="text-xs font-semibold text-slate-500">
+                                                  乗換 {transferIndex + 1}
+                                                </span>
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    updateTransport(index, (current) => ({
+                                                      ...current,
+                                                      transfers: current.transfers.filter(
+                                                        (_, idx) => idx !== transferIndex
+                                                      )
+                                                    }))
+                                                  }
+                                                  className="text-xs font-semibold text-rose-500"
+                                                >
+                                                  削除
+                                                </button>
+                                              </div>
+                                              <div className="mt-2 grid gap-3 md:grid-cols-2">
+                                                <div>
+                                                  <p className="text-xs font-semibold text-slate-500">
+                                                    駅名
+                                                  </p>
+                                                  <div className="mt-2">
+                                                    <label className="block text-[11px] font-semibold text-transparent select-none">
+                                                      Station
+                                                      <div className="relative mt-1 text-slate-900">
+                                                        <input
+                                                          value={transfer.station.value}
+                                                          onChange={(event) =>
+                                                            updateTransport(index, (current) => ({
+                                                              ...current,
+                                                              transfers: current.transfers.map(
+                                                                (item, idx) =>
+                                                                  idx === transferIndex
+                                                                    ? {
+                                                                      ...item,
+                                                                      station: {
+                                                                        ...item.station,
+                                                                        value: event.target.value
+                                                                      }
+                                                                    }
+                                                                    : item
+                                                              )
+                                                            }))
+                                                          }
+                                                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100 placeholder-transparent"
+                                                        />
+                                                      </div>
+                                                    </label>
+                                                  </div>
+                                                </div>
+                                                <div>
+                                                  <p className="text-xs font-semibold text-slate-500">
+                                                    到着時刻
+                                                  </p>
+                                                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                                    <label className="block text-[11px] font-semibold text-slate-500">
+                                                      日付
+                                                      <div className="relative mt-1">
+                                                        <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
+                                                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+                                                        </div>
+                                                        <input
+                                                          type="date"
+                                                          value={transferArrDate}
+                                                          onChange={(event) =>
+                                                            updateTransport(index, (current) => ({
+                                                              ...current,
+                                                              transfers: current.transfers.map(
+                                                                (item, idx) =>
+                                                                  idx === transferIndex
+                                                                    ? {
+                                                                      ...item,
+                                                                      arrTime: {
+                                                                        ...item.arrTime,
+                                                                        value: updateDateTimeValue(
+                                                                          item.arrTime.value,
+                                                                          event.target.value,
+                                                                          undefined
+                                                                        )
+                                                                      }
+                                                                    }
+                                                                    : item
+                                                              )
+                                                            }), { sort: true })
+                                                          }
+                                                          className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                                        />
+                                                      </div>
+                                                    </label>
+                                                    <label className="block text-[11px] font-semibold text-slate-500">
+                                                      時刻
+                                                      <div className="relative mt-1">
+                                                        <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
+                                                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+                                                        </div>
+                                                        <input
+                                                          type="time"
+                                                          value={transferArrTime}
+                                                          onChange={(event) =>
+                                                            updateTransport(index, (current) => ({
+                                                              ...current,
+                                                              transfers: current.transfers.map(
+                                                                (item, idx) =>
+                                                                  idx === transferIndex
+                                                                    ? {
+                                                                      ...item,
+                                                                      arrTime: {
+                                                                        ...item.arrTime,
+                                                                        value: updateDateTimeValue(
+                                                                          item.arrTime.value,
+                                                                          undefined,
+                                                                          event.target.value
+                                                                        )
+                                                                      }
+                                                                    }
+                                                                    : item
+                                                              )
+                                                            }), { sort: true })
+                                                          }
+                                                          className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                                        />
+                                                      </div>
+                                                    </label>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                              <div className="mt-3">
+                                                <p className="text-xs font-semibold text-slate-500">
+                                                  出発時刻
+                                                </p>
+                                                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                                  <label className="block text-[11px] font-semibold text-slate-500">
+                                                    日付
+                                                    <div className="relative mt-1">
+                                                      <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
+                                                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
+                                                      </div>
+                                                      <input
+                                                        type="date"
+                                                        value={transferDepDate}
+                                                        onChange={(event) =>
+                                                          updateTransport(index, (current) => ({
+                                                            ...current,
+                                                            transfers: current.transfers.map(
+                                                              (item, idx) =>
+                                                                idx === transferIndex
+                                                                  ? {
+                                                                    ...item,
+                                                                    depTime: {
+                                                                      ...item.depTime,
+                                                                      value: updateDateTimeValue(
+                                                                        item.depTime.value,
+                                                                        event.target.value,
+                                                                        undefined
+                                                                      )
+                                                                    }
+                                                                  }
+                                                                  : item
+                                                            )
+                                                          }))
+                                                        }
+                                                        className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                                      />
+                                                    </div>
+                                                  </label>
+                                                  <label className="block text-[11px] font-semibold text-slate-500">
+                                                    時刻
+                                                    <div className="relative mt-1">
+                                                      <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
+                                                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+                                                      </div>
+                                                      <input
+                                                        type="time"
+                                                        value={transferDepTime}
+                                                        onChange={(event) =>
+                                                          updateTransport(index, (current) => ({
+                                                            ...current,
+                                                            transfers: current.transfers.map(
+                                                              (item, idx) =>
+                                                                idx === transferIndex
+                                                                  ? {
+                                                                    ...item,
+                                                                    depTime: {
+                                                                      ...item.depTime,
+                                                                      value: updateDateTimeValue(
+                                                                        item.depTime.value,
+                                                                        undefined,
+                                                                        event.target.value
+                                                                      )
+                                                                    }
+                                                                  }
+                                                                  : item
+                                                            )
+                                                          }))
+                                                        }
+                                                        className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                                      />
+                                                    </div>
+                                                  </label>
+                                                </div>
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
                                   </div>
-                                ) : null;
-                              })()}
-                              <div className="grid gap-3 md:grid-cols-2">
-                                <label className="block text-xs font-semibold text-slate-500">
-                                  移動名
-                                  <input
-                                    value={draft.name.value}
-                                    onChange={(event) =>
-                                      updateTransport(index, (current) => ({
-                                        ...current,
-                                        name: {
-                                          ...current.name,
-                                          value: event.target.value
+                                </>
+                              ) : (
+                                <>
+                                  {(() => {
+                                    const modeConfig = getModeConfig(draft.mode.value);
+                                    const hasService = Boolean(modeConfig.serviceLabel);
+                                    const hasSeat = Boolean(modeConfig.seatLabel);
+                                    return hasService || hasSeat ? (
+                                      <div className="mb-3 grid gap-3 md:grid-cols-2">
+                                        {hasService ? (
+                                          <label className="block text-xs font-semibold text-slate-500">
+                                            {modeConfig.serviceLabel}
+                                            <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+                                              <input
+                                                value={draft.serviceName.value}
+                                                onChange={(event) =>
+                                                  updateTransport(index, (current) => ({
+                                                    ...current,
+                                                    serviceName: {
+                                                      ...current.serviceName,
+                                                      value: event.target.value
+                                                    }
+                                                  }))
+                                                }
+                                                className="w-full flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                              />
+                                              {draft.mode.value === "飛行機" ? (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => fetchFlightInfo(draft.id)}
+                                                  disabled={flightFetchingId === draft.id}
+                                                  className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
+                                                >
+                                                  {flightFetchingId === draft.id
+                                                    ? "取得中..."
+                                                    : "便情報"}
+                                                </button>
+                                              ) : null}
+                                            </div>
+                                            {draft.mode.value === "飛行機" ? (
+                                              null
+                                            ) : null}
+                                            {flightFetchError &&
+                                              flightFetchErrorId === draft.id ? (
+                                              <p className="mt-2 text-xs text-rose-500">
+                                                {flightFetchError}
+                                              </p>
+                                            ) : null}
+                                          </label>
+                                        ) : null}
+                                        {hasSeat ? (
+                                          <label className="block text-xs font-semibold text-slate-500">
+                                            {modeConfig.seatLabel}
+                                            <input
+                                              value={draft.seatNumber.value}
+                                              onChange={(event) =>
+                                                updateTransport(index, (current) => ({
+                                                  ...current,
+                                                  seatNumber: {
+                                                    ...current.seatNumber,
+                                                    value: event.target.value
+                                                  }
+                                                }))
+                                              }
+                                              className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                            />
+                                          </label>
+                                        ) : null}
+                                      </div>
+                                    ) : null;
+                                  })()}
+                                  <div className="grid gap-3 md:grid-cols-2">
+                                    <label className="block text-xs font-semibold text-slate-500">
+                                      移動名
+                                      <input
+                                        value={draft.name.value}
+                                        onChange={(event) =>
+                                          updateTransport(index, (current) => ({
+                                            ...current,
+                                            name: {
+                                              ...current.name,
+                                              value: event.target.value
+                                            }
+                                          }))
                                         }
-                                      }))
-                                    }
-                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                  />
-                                </label>
-                                <label className="block text-xs font-semibold text-slate-500">
-                                  金額
-                                  <input
-                                    type="number"
-                                    inputMode="numeric"
-                                    value={draft.price.value}
-                                    onChange={(event) =>
-                                      updateTransport(index, (current) => ({
-                                        ...current,
-                                        price: {
-                                          ...current.price,
-                                          value: event.target.value
+                                        className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                      />
+                                    </label>
+                                    <label className="block text-xs font-semibold text-slate-500">
+                                      金額
+                                      <input
+                                        type="number"
+                                        inputMode="numeric"
+                                        value={draft.price.value}
+                                        onChange={(event) =>
+                                          updateTransport(index, (current) => ({
+                                            ...current,
+                                            price: {
+                                              ...current.price,
+                                              value: event.target.value
+                                            }
+                                          }))
                                         }
-                                      }))
-                                    }
-                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                  />
-                                </label>
-                              </div>
-                              <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                <label className="block text-xs font-semibold text-slate-500">
-                                  出発地
-                                  <input
-                                    value={draft.from.value}
-                                    onChange={(event) =>
-                                      updateTransport(index, (current) => ({
-                                        ...current,
-                                        from: {
-                                          ...current.from,
-                                          value: event.target.value
+                                        className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                      />
+                                    </label>
+                                  </div>
+                                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                    <label className="block text-xs font-semibold text-slate-500">
+                                      出発地
+                                      <input
+                                        value={draft.from.value}
+                                        onChange={(event) =>
+                                          updateTransport(index, (current) => ({
+                                            ...current,
+                                            from: {
+                                              ...current.from,
+                                              value: event.target.value
+                                            }
+                                          }))
                                         }
-                                      }))
-                                    }
-                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                  />
-                                </label>
-                                <label className="block text-xs font-semibold text-slate-500">
-                                  到着地
-                                  <input
-                                    value={draft.to.value}
-                                    onChange={(event) =>
-                                      updateTransport(index, (current) => ({
-                                        ...current,
-                                        to: { ...current.to, value: event.target.value }
-                                      }))
-                                    }
-                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                  />
-                                </label>
-                              </div>
-                              <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                <label className="block text-xs font-semibold text-slate-500">
-                                  出発時刻
-                                  <input
-                                    value={draft.depTime.value}
-                                    onChange={(event) =>
-                                      updateTransport(index, (current) => ({
-                                        ...current,
-                                        depTime: {
-                                          ...current.depTime,
-                                          value: event.target.value
+                                        className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                      />
+                                    </label>
+                                    <label className="block text-xs font-semibold text-slate-500">
+                                      到着地
+                                      <input
+                                        value={draft.to.value}
+                                        onChange={(event) =>
+                                          updateTransport(index, (current) => ({
+                                            ...current,
+                                            to: { ...current.to, value: event.target.value }
+                                          }))
                                         }
-                                      }))
-                                    }
-                                    placeholder="例: 2025-11-23 12:15"
-                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                  />
-                                </label>
-                                <label className="block text-xs font-semibold text-slate-500">
-                                  到着時刻
-                                  <input
-                                    value={draft.arrTime.value}
-                                    onChange={(event) =>
-                                      updateTransport(index, (current) => ({
-                                        ...current,
-                                        arrTime: {
-                                          ...current.arrTime,
-                                          value: event.target.value
-                                        }
-                                      }))
-                                    }
-                                    placeholder="例: 2025-11-23 14:40"
-                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                  />
-                                </label>
-                              </div>
-                              <label className="mt-3 block text-xs font-semibold text-slate-500">
-                                メモ
-                                <textarea
-                                  value={draft.notes.value}
+                                        className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                      />
+                                    </label>
+                                  </div>
+                                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                    <div>
+                                      <p className="text-xs font-semibold text-slate-500">
+                                        出発時刻
+                                      </p>
+                                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                        <label className="block text-[11px] font-semibold text-slate-400">
+                                          日付
+                                          <input
+                                            type="date"
+                                            value={depDate}
+                                            onChange={(event) =>
+                                              updateTransport(index, (current) => ({
+                                                ...current,
+                                                depTime: {
+                                                  ...current.depTime,
+                                                  value: updateDateTimeValue(
+                                                    current.depTime.value,
+                                                    event.target.value,
+                                                    undefined
+                                                  )
+                                                }
+                                              }), { sort: true })
+                                            }
+                                            className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                          />
+                                        </label>
+                                        <label className="block text-[11px] font-semibold text-slate-400">
+                                          時刻
+                                          <input
+                                            type="time"
+                                            value={depTime}
+                                            onChange={(event) =>
+                                              updateTransport(index, (current) => ({
+                                                ...current,
+                                                depTime: {
+                                                  ...current.depTime,
+                                                  value: updateDateTimeValue(
+                                                    current.depTime.value,
+                                                    undefined,
+                                                    event.target.value
+                                                  )
+                                                }
+                                              }), { sort: true })
+                                            }
+                                            className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                          />
+                                        </label>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <p className="text-xs font-semibold text-slate-500">
+                                        到着時刻
+                                      </p>
+                                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                        <label className="block text-[11px] font-semibold text-slate-400">
+                                          日付
+                                          <input
+                                            type="date"
+                                            value={arrDate}
+                                            onChange={(event) =>
+                                              updateTransport(index, (current) => ({
+                                                ...current,
+                                                arrTime: {
+                                                  ...current.arrTime,
+                                                  value: updateDateTimeValue(
+                                                    current.arrTime.value,
+                                                    event.target.value,
+                                                    undefined
+                                                  )
+                                                }
+                                              }), { sort: true })
+                                            }
+                                            className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                          />
+                                        </label>
+                                        <label className="block text-[11px] font-semibold text-slate-400">
+                                          時刻
+                                          <input
+                                            type="time"
+                                            value={arrTime}
+                                            onChange={(event) =>
+                                              updateTransport(index, (current) => ({
+                                                ...current,
+                                                arrTime: {
+                                                  ...current.arrTime,
+                                                  value: updateDateTimeValue(
+                                                    current.arrTime.value,
+                                                    undefined,
+                                                    event.target.value
+                                                  )
+                                                }
+                                              }), { sort: true })
+                                            }
+                                            className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                          />
+                                        </label>
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <label className="mt-3 block text-xs font-semibold text-slate-500">
+                                    メモ
+                                    <textarea
+                                      value={draft.notes.value}
+                                      onChange={(event) =>
+                                        updateTransport(index, (current) => ({
+                                          ...current,
+                                          notes: {
+                                            ...current.notes,
+                                            value: event.target.value
+                                          }
+                                        }))
+                                      }
+                                      rows={2}
+                                      className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                    />
+                                  </label>
+                                </>
+                              )}
+                              <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-500">
+                                <input
+                                  type="checkbox"
+                                  checked={draft.paid.value === true}
                                   onChange={(event) =>
                                     updateTransport(index, (current) => ({
                                       ...current,
-                                      notes: {
-                                        ...current.notes,
-                                        value: event.target.value
+                                      paid: {
+                                        ...current.paid,
+                                        value: event.target.checked
                                       }
                                     }))
                                   }
-                                  rows={2}
-                                  className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                  className="h-4 w-4 rounded border-slate-300"
                                 />
+                                支払い済み
                               </label>
-                            </>
-                          )}
-                          <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-500">
-                            <input
-                              type="checkbox"
-                              checked={draft.paid.value === true}
-                              onChange={(event) =>
-                                updateTransport(index, (current) => ({
-                                  ...current,
-                                  paid: {
-                                    ...current.paid,
-                                    value: event.target.checked
-                                  }
-                                }))
-                              }
-                              className="h-4 w-4 rounded border-slate-300"
-                            />
-                            支払い済み
-                          </label>
+                            </div>
+                          </SwipeDeleteCard>
                         </div>
-                      </SwipeDeleteCard>
-                    ))}
+                      );
+                    })}
                   </div>
                 )
               ) : transportations.length === 0 ? (
@@ -1988,7 +3050,7 @@ function PlanDetailContent({ user }: { user: User }) {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {transportations.map((item, index) => {
+                  {sortedTransportations.map((item, index) => {
                     const name =
                       getStringField(item, TRANSPORT_NAME_KEYS) ||
                       `移動 ${index + 1}`;
@@ -2565,11 +3627,10 @@ function PlanDetailContent({ user }: { user: User }) {
                   <div
                     className="h-2 rounded-full bg-slate-900/80"
                     style={{
-                      width: `${
-                        totalCost
-                          ? Math.min(100, Math.round((savedTotal / totalCost) * 100))
-                          : 0
-                      }%`
+                      width: `${totalCost
+                        ? Math.min(100, Math.round((savedTotal / totalCost) * 100))
+                        : 0
+                        }%`
                     }}
                   />
                 </div>
