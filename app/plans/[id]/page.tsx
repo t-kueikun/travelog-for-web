@@ -986,10 +986,12 @@ function normalizeAirport(value: unknown) {
   if (!code && !name) {
     return "";
   }
-  const cityMapped = resolveCityAirport(name, code);
+  const isCityCode = Boolean(code && CITY_CODE_TO_AIRPORT[code]);
+  // Prefer explicit airport code (e.g. ITM) over city-name mapping (e.g. Osaka -> KIX).
+  const cityMapped = isCityCode || !code ? resolveCityAirport(name, code) : null;
   const jpName = code ? AIRPORT_NAME_JA[code] : "";
-  const displayName = cityMapped?.name || jpName || name;
-  const displayCode = cityMapped?.code || code;
+  const displayName = jpName || cityMapped?.name || name;
+  const displayCode = code || cityMapped?.code || "";
   if (displayName && displayCode) {
     return `${displayName} (${displayCode})`;
   }
@@ -1863,9 +1865,12 @@ function PlanDetailContent({ user }: { user: User }) {
       });
       scheduleTransportSort();
     } catch (error) {
-      setFlightFetchError("便情報の取得に失敗しました。");
+      if (error instanceof TypeError) {
+        setFlightFetchError("通信に失敗しました。時間をおいて再試行してください。");
+      } else {
+        setFlightFetchError("便情報の取得に失敗しました。");
+      }
       setFlightFetchErrorId(transportId);
-      console.error(error);
     } finally {
       setFlightFetchingId(null);
     }
@@ -2572,51 +2577,51 @@ function PlanDetailContent({ user }: { user: User }) {
                                                   削除
                                                 </button>
                                               </div>
-                                              <div className="mt-2 grid gap-3 md:grid-cols-2">
-                                                <div>
-                                                  <p className="text-xs font-semibold text-slate-500">
-                                                    駅名
-                                                  </p>
-                                                  <div className="mt-2">
-                                                    <label className="block text-[11px] font-semibold text-transparent select-none">
-                                                      Station
-                                                      <div className="relative mt-1 text-slate-900">
-                                                        <input
-                                                          value={transfer.station.value}
-                                                          onChange={(event) =>
-                                                            updateTransport(index, (current) => ({
-                                                              ...current,
-                                                              transfers: current.transfers.map(
-                                                                (item, idx) =>
-                                                                  idx === transferIndex
-                                                                    ? {
-                                                                      ...item,
-                                                                      station: {
-                                                                        ...item.station,
-                                                                        value: event.target.value
-                                                                      }
+                                              <div className="mt-2">
+                                                <p className="text-xs font-semibold text-slate-500">
+                                                  駅名
+                                                </p>
+                                                <div className="mt-2">
+                                                  <label className="block text-[11px] font-semibold text-transparent select-none">
+                                                    Station
+                                                    <div className="relative mt-1 text-slate-900">
+                                                      <input
+                                                        value={transfer.station.value}
+                                                        onChange={(event) =>
+                                                          updateTransport(index, (current) => ({
+                                                            ...current,
+                                                            transfers: current.transfers.map(
+                                                              (item, idx) =>
+                                                                idx === transferIndex
+                                                                  ? {
+                                                                    ...item,
+                                                                    station: {
+                                                                      ...item.station,
+                                                                      value: event.target.value
                                                                     }
-                                                                    : item
-                                                              )
-                                                            }))
-                                                          }
-                                                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100 placeholder-transparent"
-                                                        />
-                                                      </div>
-                                                    </label>
-                                                  </div>
+                                                                  }
+                                                                  : item
+                                                            )
+                                                          }))
+                                                        }
+                                                        className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100 placeholder-transparent"
+                                                      />
+                                                    </div>
+                                                  </label>
                                                 </div>
-                                                <div>
-                                                  <p className="text-xs font-semibold text-slate-500">
-                                                    到着時刻
+                                              </div>
+                                              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                                                  <p className="text-[11px] font-bold text-slate-500">
+                                                    1. この駅に到着
                                                   </p>
-                                                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                                                  <p className="mt-1 text-[11px] text-slate-400">
+                                                    乗換駅に着いた時刻
+                                                  </p>
+                                                  <div className="mt-2 grid gap-2 md:grid-cols-2">
                                                     <label className="block text-[11px] font-semibold text-slate-500">
                                                       日付
-                                                      <div className="relative mt-1">
-                                                        <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
-                                                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
-                                                        </div>
+                                                      <div className="mt-1">
                                                         <input
                                                           type="date"
                                                           value={transferArrDate}
@@ -2641,16 +2646,13 @@ function PlanDetailContent({ user }: { user: User }) {
                                                               )
                                                             }), { sort: true })
                                                           }
-                                                          className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
                                                         />
                                                       </div>
                                                     </label>
                                                     <label className="block text-[11px] font-semibold text-slate-500">
                                                       時刻
-                                                      <div className="relative mt-1">
-                                                        <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
-                                                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
-                                                        </div>
+                                                      <div className="mt-1">
                                                         <input
                                                           type="time"
                                                           value={transferArrTime}
@@ -2675,86 +2677,83 @@ function PlanDetailContent({ user }: { user: User }) {
                                                               )
                                                             }), { sort: true })
                                                           }
-                                                          className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
                                                         />
                                                       </div>
                                                     </label>
                                                   </div>
                                                 </div>
-                                              </div>
-                                              <div className="mt-3">
-                                                <p className="text-xs font-semibold text-slate-500">
-                                                  出発時刻
-                                                </p>
-                                                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                                                  <label className="block text-[11px] font-semibold text-slate-500">
-                                                    日付
-                                                    <div className="relative mt-1">
-                                                      <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
-                                                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2" /><line x1="16" y1="2" x2="16" y2="6" /><line x1="8" y1="2" x2="8" y2="6" /><line x1="3" y1="10" x2="21" y2="10" /></svg>
-                                                      </div>
-                                                      <input
-                                                        type="date"
-                                                        value={transferDepDate}
-                                                        onChange={(event) =>
-                                                          updateTransport(index, (current) => ({
-                                                            ...current,
-                                                            transfers: current.transfers.map(
-                                                              (item, idx) =>
-                                                                idx === transferIndex
-                                                                  ? {
-                                                                    ...item,
-                                                                    depTime: {
-                                                                      ...item.depTime,
-                                                                      value: updateDateTimeValue(
-                                                                        item.depTime.value,
-                                                                        event.target.value,
-                                                                        undefined
-                                                                      )
+                                                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                                                  <p className="text-[11px] font-bold text-slate-500">
+                                                    2. この駅を出発
+                                                  </p>
+                                                  <p className="mt-1 text-[11px] text-slate-400">
+                                                    次の列車が出る時刻
+                                                  </p>
+                                                  <div className="mt-2 grid gap-2 md:grid-cols-2">
+                                                    <label className="block text-[11px] font-semibold text-slate-500">
+                                                      日付
+                                                      <div className="mt-1">
+                                                        <input
+                                                          type="date"
+                                                          value={transferDepDate}
+                                                          onChange={(event) =>
+                                                            updateTransport(index, (current) => ({
+                                                              ...current,
+                                                              transfers: current.transfers.map(
+                                                                (item, idx) =>
+                                                                  idx === transferIndex
+                                                                    ? {
+                                                                      ...item,
+                                                                      depTime: {
+                                                                        ...item.depTime,
+                                                                        value: updateDateTimeValue(
+                                                                          item.depTime.value,
+                                                                          event.target.value,
+                                                                          undefined
+                                                                        )
+                                                                      }
                                                                     }
-                                                                  }
-                                                                  : item
-                                                            )
-                                                          }))
-                                                        }
-                                                        className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
-                                                      />
-                                                    </div>
-                                                  </label>
-                                                  <label className="block text-[11px] font-semibold text-slate-500">
-                                                    時刻
-                                                    <div className="relative mt-1">
-                                                      <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
-                                                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>
+                                                                    : item
+                                                              )
+                                                            }))
+                                                          }
+                                                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                                        />
                                                       </div>
-                                                      <input
-                                                        type="time"
-                                                        value={transferDepTime}
-                                                        onChange={(event) =>
-                                                          updateTransport(index, (current) => ({
-                                                            ...current,
-                                                            transfers: current.transfers.map(
-                                                              (item, idx) =>
-                                                                idx === transferIndex
-                                                                  ? {
-                                                                    ...item,
-                                                                    depTime: {
-                                                                      ...item.depTime,
-                                                                      value: updateDateTimeValue(
-                                                                        item.depTime.value,
-                                                                        undefined,
-                                                                        event.target.value
-                                                                      )
+                                                    </label>
+                                                    <label className="block text-[11px] font-semibold text-slate-500">
+                                                      時刻
+                                                      <div className="mt-1">
+                                                        <input
+                                                          type="time"
+                                                          value={transferDepTime}
+                                                          onChange={(event) =>
+                                                            updateTransport(index, (current) => ({
+                                                              ...current,
+                                                              transfers: current.transfers.map(
+                                                                (item, idx) =>
+                                                                  idx === transferIndex
+                                                                    ? {
+                                                                      ...item,
+                                                                      depTime: {
+                                                                        ...item.depTime,
+                                                                        value: updateDateTimeValue(
+                                                                          item.depTime.value,
+                                                                          undefined,
+                                                                          event.target.value
+                                                                        )
+                                                                      }
                                                                     }
-                                                                  }
-                                                                  : item
-                                                            )
-                                                          }))
-                                                        }
-                                                        className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
-                                                      />
-                                                    </div>
-                                                  </label>
+                                                                    : item
+                                                              )
+                                                            }))
+                                                          }
+                                                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                                        />
+                                                      </div>
+                                                    </label>
+                                                  </div>
                                                 </div>
                                               </div>
                                             </div>
@@ -2762,6 +2761,73 @@ function PlanDetailContent({ user }: { user: User }) {
                                         })}
                                       </div>
                                     )}
+                                  </div>
+                                  <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
+                                    <p className="text-[11px] font-bold text-slate-500">到着情報</p>
+                                    <p className="mt-1 text-[11px] text-slate-400">
+                                      最終目的地と到着時刻
+                                    </p>
+                                    <label className="mt-2 block text-xs font-semibold text-slate-500">
+                                      到着地
+                                      <input
+                                        value={draft.to.value}
+                                        onChange={(event) =>
+                                          updateTransport(index, (current) => ({
+                                            ...current,
+                                            to: { ...current.to, value: event.target.value }
+                                          }))
+                                        }
+                                        className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                      />
+                                    </label>
+                                    <div className="mt-3 grid gap-2 md:grid-cols-2">
+                                      <label className="block text-[11px] font-semibold text-slate-500">
+                                        到着日
+                                        <div className="mt-1">
+                                          <input
+                                            type="date"
+                                            value={arrDate}
+                                            onChange={(event) =>
+                                              updateTransport(index, (current) => ({
+                                                ...current,
+                                                arrTime: {
+                                                  ...current.arrTime,
+                                                  value: updateDateTimeValue(
+                                                    current.arrTime.value,
+                                                    event.target.value,
+                                                    undefined
+                                                  )
+                                                }
+                                              }), { sort: true })
+                                            }
+                                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                          />
+                                        </div>
+                                      </label>
+                                      <label className="block text-[11px] font-semibold text-slate-500">
+                                        到着時刻
+                                        <div className="mt-1">
+                                          <input
+                                            type="time"
+                                            value={arrTime}
+                                            onChange={(event) =>
+                                              updateTransport(index, (current) => ({
+                                                ...current,
+                                                arrTime: {
+                                                  ...current.arrTime,
+                                                  value: updateDateTimeValue(
+                                                    current.arrTime.value,
+                                                    undefined,
+                                                    event.target.value
+                                                  )
+                                                }
+                                              }), { sort: true })
+                                            }
+                                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                          />
+                                        </div>
+                                      </label>
+                                    </div>
                                   </div>
                                 </>
                               ) : (
