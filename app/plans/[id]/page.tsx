@@ -8,11 +8,23 @@ import {
   useState,
   type ReactNode
 } from "react";
+import { createPortal } from "react-dom";
 import type { User } from "firebase/auth";
 import { useParams } from "next/navigation";
 import AuthGate from "@/components/AuthGate";
 import PageShell from "@/components/PageShell";
-import { format } from "date-fns";
+import {
+  addDays,
+  addMonths,
+  endOfMonth,
+  format,
+  getDay,
+  isAfter,
+  isBefore,
+  isSameDay,
+  startOfDay,
+  startOfMonth
+} from "date-fns";
 import CommentForm from "@/components/CommentForm";
 import CommentList from "@/components/CommentList";
 import {
@@ -62,6 +74,8 @@ type NumberDraft = {
   original: string;
 };
 
+type PriceCurrency = "JPY" | "USD";
+
 type BooleanDraft = {
   key: string;
   value: boolean | null;
@@ -88,6 +102,7 @@ type TransportationDraft = {
   depTime: FieldDraft;
   arrTime: FieldDraft;
   price: NumberDraft;
+  currency: FieldDraft;
   paid: BooleanDraft;
   notes: FieldDraft;
   transfers: TransferDraft[];
@@ -97,6 +112,7 @@ type HotelDraft = {
   raw: ItemRecord;
   name: FieldDraft;
   price: NumberDraft;
+  currency: FieldDraft;
   checkIn: FieldDraft;
   checkOut: FieldDraft;
   notes: FieldDraft;
@@ -270,6 +286,17 @@ const TRANSPORT_TO_KEYS = [
 ];
 const TRANSPORT_TO_PATTERNS = ["arrival", "arrive", "destination", "dest", "end"];
 const TRANSPORT_PRICE_KEYS = ["price", "amount", "cost", "fee", "fare", "total"];
+const TRANSPORT_ORIGINAL_PRICE_KEYS = [
+  "originalPrice",
+  "priceOriginal",
+  "sourcePrice"
+];
+const TRANSPORT_CURRENCY_KEYS = [
+  "currency",
+  "currencyCode",
+  "priceCurrency",
+  "costCurrency"
+];
 const TRANSPORT_PAID_KEYS = [
   "isPaid",
   "paid",
@@ -299,8 +326,17 @@ const TRANSFER_ARR_KEYS = ["arrivalTime", "arrTime", "arriveAt"];
 
 const HOTEL_NAME_KEYS = ["name", "title"];
 const HOTEL_PRICE_KEYS = ["price", "amount", "cost", "fee", "total"];
+const HOTEL_ORIGINAL_PRICE_KEYS = ["originalPrice", "priceOriginal", "sourcePrice"];
+const HOTEL_CURRENCY_KEYS = [
+  "currency",
+  "currencyCode",
+  "priceCurrency",
+  "costCurrency"
+];
 const HOTEL_CHECKIN_KEYS = ["checkIn", "checkInDate", "startDate"];
 const HOTEL_CHECKOUT_KEYS = ["checkOut", "checkOutDate", "endDate"];
+
+const USD_TO_JPY_RATE = 150;
 
 const ACTIVITY_TITLE_KEYS = ["name", "title", "activity"];
 const ACTIVITY_DATE_KEYS = ["date", "startDate", "time"];
@@ -427,6 +463,68 @@ function getNumberField(item: ItemRecord, keys: string[]) {
     }
   }
   return null;
+}
+
+function normalizePriceCurrency(value: string): PriceCurrency {
+  return value.trim().toUpperCase() === "USD" ? "USD" : "JPY";
+}
+
+function buildCurrencyDraft(item: ItemRecord, keys: string[]) {
+  const key = resolveKey(item, keys);
+  const value = normalizePriceCurrency(key ? getStringField(item, [key]) : "");
+  return { key: key || keys[0], value, original: value };
+}
+
+function buildPriceDraft(
+  item: ItemRecord,
+  priceKeys: string[],
+  originalPriceKeys: string[],
+  currency: PriceCurrency
+) {
+  const key = resolveKey(item, priceKeys);
+  const storedPrice = key ? getNumberField(item, [key]) : null;
+  const originalPrice = getNumberField(item, originalPriceKeys);
+  const effectivePrice =
+    currency === "USD" ? originalPrice ?? storedPrice : storedPrice;
+  const text = typeof effectivePrice === "number" ? String(effectivePrice) : "";
+  return { key, value: text, original: text };
+}
+
+function getItemCurrency(item: ItemRecord, keys: string[]) {
+  return normalizePriceCurrency(getStringField(item, keys));
+}
+
+function convertPriceToYen(amount: number, currency: PriceCurrency) {
+  if (currency === "USD") {
+    return Math.round(amount * USD_TO_JPY_RATE);
+  }
+  return Math.round(amount);
+}
+
+function formatUsd(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2
+  }).format(value);
+}
+
+function formatPriceLabel(
+  priceYen: number | null,
+  currency: PriceCurrency,
+  originalPrice: number | null = null
+) {
+  if (priceYen === null) {
+    return "";
+  }
+  if (currency === "USD") {
+    const usd =
+      originalPrice !== null
+        ? originalPrice
+        : Math.round((priceYen / USD_TO_JPY_RATE) * 100) / 100;
+    return `${formatYen(priceYen)} (${formatUsd(usd)})`;
+  }
+  return formatYen(priceYen);
 }
 
 function getBooleanField(item: ItemRecord, keys: string[]) {
@@ -1229,6 +1327,7 @@ function buildTransportationDrafts(items: ItemRecord[]) {
     const serviceKeys = config.serviceKeys ?? [];
     const seatKeys = config.seatKeys ?? [];
     const transfers = Array.isArray(item.transfers) ? item.transfers : [];
+    const currency = buildCurrencyDraft(item, TRANSPORT_CURRENCY_KEYS);
     return {
       raw: item,
       id,
@@ -1244,7 +1343,13 @@ function buildTransportationDrafts(items: ItemRecord[]) {
       to: buildLocationDraft(item, TRANSPORT_TO_KEYS, TRANSPORT_TO_PATTERNS),
       depTime: buildDateDraft(item, TRANSPORT_DEP_KEYS),
       arrTime: buildDateDraft(item, TRANSPORT_ARR_KEYS),
-      price: buildNumberDraft(item, TRANSPORT_PRICE_KEYS),
+      price: buildPriceDraft(
+        item,
+        TRANSPORT_PRICE_KEYS,
+        TRANSPORT_ORIGINAL_PRICE_KEYS,
+        normalizePriceCurrency(currency.value)
+      ),
+      currency,
       paid: buildBooleanDraft(item, TRANSPORT_PAID_KEYS),
       notes: buildStringDraft(item, NOTES_KEYS),
       transfers: buildTransferDrafts(transfers as ItemRecord[])
@@ -1255,10 +1360,17 @@ function buildTransportationDrafts(items: ItemRecord[]) {
 function buildHotelDrafts(items: ItemRecord[]) {
   return items.map((raw) => {
     const item = raw && typeof raw === "object" ? raw : {};
+    const currency = buildCurrencyDraft(item, HOTEL_CURRENCY_KEYS);
     return {
       raw: item,
       name: buildStringDraft(item, HOTEL_NAME_KEYS),
-      price: buildNumberDraft(item, HOTEL_PRICE_KEYS),
+      price: buildPriceDraft(
+        item,
+        HOTEL_PRICE_KEYS,
+        HOTEL_ORIGINAL_PRICE_KEYS,
+        normalizePriceCurrency(currency.value)
+      ),
+      currency,
       checkIn: buildDateDraft(item, HOTEL_CHECKIN_KEYS),
       checkOut: buildDateDraft(item, HOTEL_CHECKOUT_KEYS),
       notes: buildStringDraft(item, NOTES_KEYS),
@@ -1351,6 +1463,26 @@ function applyBooleanDraft(item: ItemRecord, draft: BooleanDraft) {
   item[draft.key] = draft.value;
 }
 
+function applyPriceDraft(
+  item: ItemRecord,
+  priceDraft: NumberDraft,
+  currencyValue: PriceCurrency,
+  originalPriceKeys: string[]
+) {
+  if (!priceDraft.key) {
+    return;
+  }
+  const amount = toNumberOrNull(priceDraft.value);
+  item[priceDraft.key] =
+    amount === null ? null : convertPriceToYen(amount, currencyValue);
+  const originalKey = originalPriceKeys[0];
+  if (currencyValue === "USD") {
+    item[originalKey] = amount;
+  } else {
+    delete item[originalKey];
+  }
+}
+
 function applyTransferDrafts(drafts: TransferDraft[]) {
   return drafts.map((draft) => {
     const nextItem: ItemRecord = { ...draft.raw, id: draft.id };
@@ -1372,7 +1504,13 @@ function applyTransportationDrafts(drafts: TransportationDraft[]) {
     applyStringDraft(nextItem, draft.to);
     applyStringDraft(nextItem, draft.depTime);
     applyStringDraft(nextItem, draft.arrTime);
-    applyNumberDraft(nextItem, draft.price);
+    applyPriceDraft(
+      nextItem,
+      draft.price,
+      normalizePriceCurrency(draft.currency.value),
+      TRANSPORT_ORIGINAL_PRICE_KEYS
+    );
+    applyStringDraft(nextItem, draft.currency);
     applyBooleanDraft(nextItem, draft.paid);
     applyStringDraft(nextItem, draft.notes);
     if (draft.mode.value === "在来線" || Array.isArray(draft.raw.transfers)) {
@@ -1386,7 +1524,13 @@ function applyHotelDrafts(drafts: HotelDraft[]) {
   return drafts.map((draft) => {
     const nextItem: ItemRecord = { ...draft.raw };
     applyStringDraft(nextItem, draft.name);
-    applyNumberDraft(nextItem, draft.price);
+    applyPriceDraft(
+      nextItem,
+      draft.price,
+      normalizePriceCurrency(draft.currency.value),
+      HOTEL_ORIGINAL_PRICE_KEYS
+    );
+    applyStringDraft(nextItem, draft.currency);
     applyStringDraft(nextItem, draft.checkIn);
     applyStringDraft(nextItem, draft.checkOut);
     applyStringDraft(nextItem, draft.notes);
@@ -1460,6 +1604,432 @@ function SectionTitle({ title }: { title: string }) {
     <h3 className="text-sm font-semibold tracking-wide text-slate-500">
       {title}
     </h3>
+  );
+}
+
+function parseDateInputValue(value: string) {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : startOfDay(parsed);
+}
+
+function toDateInput(date: Date) {
+  return format(date, "yyyy-MM-dd");
+}
+
+function buildMonthCells(month: Date) {
+  const firstDay = startOfMonth(month);
+  const daysInMonth = endOfMonth(month).getDate();
+  const leadingBlanks = getDay(firstDay);
+  const cells: Array<Date | null> = [];
+  for (let i = 0; i < leadingBlanks; i += 1) {
+    cells.push(null);
+  }
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    cells.push(new Date(month.getFullYear(), month.getMonth(), day));
+  }
+  return cells;
+}
+
+function isInRange(day: Date, start: Date | null, end: Date | null) {
+  if (!start || !end) {
+    return false;
+  }
+  return !isBefore(day, start) && !isAfter(day, end);
+}
+
+function StayDateRangePicker({
+  startDate,
+  endDate,
+  originalStartDate,
+  originalEndDate,
+  onChange
+}: {
+  startDate: string;
+  endDate: string;
+  originalStartDate: string;
+  originalEndDate: string;
+  onChange: (nextStartDate: string, nextEndDate: string) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [anchorDate, setAnchorDate] = useState<Date | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+
+  const start = parseDateInputValue(startDate);
+  const end = parseDateInputValue(endDate);
+  const safeEnd = end || start;
+  const [leftMonth, setLeftMonth] = useState<Date>(
+    startOfMonth(start || new Date())
+  );
+  const rightMonth = addMonths(leftMonth, 1);
+  const visualStart = anchorDate ?? start;
+  const visualEnd = anchorDate ? anchorDate : safeEnd;
+  const startLabel = start ? format(start, "M/d") : "未選択";
+  const endLabel = safeEnd ? format(safeEnd, "M/d") : "未選択";
+  const rangeLabel =
+    start || safeEnd
+      ? `${startLabel} - ${endLabel}`
+      : "日程を選択";
+
+  useEffect(() => {
+    const nextStart = parseDateInputValue(startDate);
+    setLeftMonth(startOfMonth(nextStart || new Date()));
+    setAnchorDate(null);
+  }, [startDate]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    const handleOutsideClick = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (!target || popoverRef.current?.contains(target)) {
+        return;
+      }
+      setIsOpen(false);
+      setAnchorDate(null);
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    document.addEventListener("touchstart", handleOutsideClick, { passive: true });
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+      document.removeEventListener("touchstart", handleOutsideClick);
+    };
+  }, [isOpen]);
+
+  const handleDayClick = (day: Date) => {
+    const selected = startOfDay(day);
+    if (!anchorDate) {
+      setAnchorDate(selected);
+      return;
+    }
+
+    const nextStart = isBefore(selected, anchorDate) ? selected : anchorDate;
+    const nextEnd = isAfter(selected, anchorDate) ? selected : anchorDate;
+    onChange(toDateInput(nextStart), toDateInput(nextEnd));
+    setAnchorDate(null);
+  };
+
+  const applyNights = (nights: number) => {
+    if (!start) {
+      return;
+    }
+    onChange(toDateInput(start), toDateInput(addDays(start, nights)));
+  };
+
+  const restoreOriginalRange = () => {
+    if (!originalStartDate || !originalEndDate) {
+      return;
+    }
+    onChange(originalStartDate, originalEndDate);
+  };
+
+  const renderMonth = (month: Date) => {
+    const cells = buildMonthCells(month);
+    return (
+      <div className="w-full">
+        <p className="text-center text-base font-bold text-slate-900">
+          {format(month, "yyyy年M月")}
+        </p>
+        <div className="mt-3 grid grid-cols-7 gap-y-2 text-center text-xs text-slate-500">
+          {["(日)", "(月)", "(火)", "(水)", "(木)", "(金)", "(土)"].map((label) => (
+            <span key={`${format(month, "yyyy-MM")}-${label}`}>{label}</span>
+          ))}
+        </div>
+        <div className="mt-2 grid grid-cols-7 gap-y-2">
+          {cells.map((cell, index) => {
+            if (!cell) {
+              return <span key={`blank-${format(month, "yyyy-MM")}-${index}`} />;
+            }
+            const selectedStart = visualStart ? isSameDay(cell, visualStart) : false;
+            const selectedEnd = visualEnd ? isSameDay(cell, visualEnd) : false;
+            const inRange = anchorDate ? false : isInRange(cell, start, safeEnd);
+            const highlighted = selectedStart || selectedEnd;
+            return (
+              <button
+                key={toDateInput(cell)}
+                type="button"
+                onClick={() => handleDayClick(cell)}
+                className={`mx-auto h-9 w-9 rounded-lg text-sm font-semibold transition md:h-10 md:w-10 md:text-base ${highlighted
+                  ? "bg-blue-600 text-white"
+                  : inRange
+                    ? "bg-blue-50 text-blue-700"
+                    : "text-slate-900 hover:bg-slate-100"
+                  }`}
+              >
+                {format(cell, "d")}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div ref={popoverRef} className="relative rounded-xl border border-slate-200 bg-slate-50 p-3">
+      <button
+        type="button"
+        onClick={() =>
+          setIsOpen((current) => {
+            const next = !current;
+            if (!next) {
+              setAnchorDate(null);
+            }
+            return next;
+          })
+        }
+        className="flex w-full items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-left"
+        aria-expanded={isOpen}
+      >
+        <div>
+          <p className="text-[10px] font-semibold text-slate-500">宿泊日程</p>
+          <p className="mt-1 text-base font-semibold leading-tight text-slate-900">
+            {rangeLabel}
+          </p>
+        </div>
+        <span className="text-xs font-semibold text-blue-600">
+          {isOpen ? "閉じる" : "選択"}
+        </span>
+      </button>
+      {isOpen ? (
+        <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-40 rounded-xl border border-slate-200 bg-white p-3 shadow-2xl">
+          <p className="text-xs text-slate-500">
+            {anchorDate
+              ? "終了日を選択してください（外側タップで閉じる）"
+              : "開始日→終了日を順に選択（外側タップで閉じる）"}
+          </p>
+          <div className="mt-2 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setLeftMonth((current) => addMonths(current, -1))}
+              className="rounded-lg px-2 py-1 text-sm text-slate-600 hover:bg-slate-100"
+              aria-label="前の月"
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              onClick={() => setLeftMonth((current) => addMonths(current, 1))}
+              className="rounded-lg px-2 py-1 text-sm text-slate-600 hover:bg-slate-100"
+              aria-label="次の月"
+            >
+              ›
+            </button>
+          </div>
+          <div className="mt-2 grid gap-4 md:grid-cols-2">
+            <div>
+              {renderMonth(leftMonth)}
+            </div>
+            <div className="hidden md:block">{renderMonth(rightMonth)}</div>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-200 pt-3">
+            {originalStartDate && originalEndDate ? (
+              <button
+                type="button"
+                onClick={restoreOriginalRange}
+                className="rounded-full border border-blue-500 px-4 py-1.5 text-sm font-semibold text-blue-600"
+              >
+                元の日程
+              </button>
+            ) : null}
+            {[1, 2, 3, 7].map((nights) => (
+              <button
+                key={`stay-${nights}`}
+                type="button"
+                onClick={() => applyNights(nights)}
+                className="rounded-full border border-slate-300 px-4 py-1.5 text-sm font-semibold text-slate-700"
+              >
+                +{nights}日
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PopoverDatePicker({
+  value,
+  onChange,
+  onCommit,
+  placeholder = "日付を選択"
+}: {
+  value: string;
+  onChange: (nextDate: string) => void;
+  onCommit?: () => void;
+  placeholder?: string;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [month, setMonth] = useState<Date>(startOfMonth(new Date()));
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const popupRef = useRef<HTMLDivElement | null>(null);
+  const [popupStyle, setPopupStyle] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
+  const selected = parseDateInputValue(value);
+  const triggerLabel = selected ? format(selected, "M/d") : placeholder;
+
+  useEffect(() => {
+    const nextDate = parseDateInputValue(value);
+    setMonth(startOfMonth(nextDate || new Date()));
+  }, [value]);
+
+  const updatePopupPosition = () => {
+    const anchor = wrapperRef.current;
+    if (!anchor || typeof window === "undefined") {
+      return;
+    }
+    const rect = anchor.getBoundingClientRect();
+    const viewportPadding = 12;
+    const width = Math.min(360, window.innerWidth - viewportPadding * 2);
+    const centeredLeft = rect.left + rect.width / 2 - width / 2;
+    const left = Math.max(
+      viewportPadding,
+      Math.min(centeredLeft, window.innerWidth - width - viewportPadding)
+    );
+    const top = rect.bottom + 8;
+    setPopupStyle({ top, left, width });
+  };
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    updatePopupPosition();
+
+    const handleOutsideClick = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (
+        !target ||
+        wrapperRef.current?.contains(target) ||
+        popupRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setIsOpen(false);
+      onCommit?.();
+    };
+    const handleViewportUpdate = () => {
+      updatePopupPosition();
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    document.addEventListener("touchstart", handleOutsideClick, { passive: true });
+    window.addEventListener("resize", handleViewportUpdate);
+    window.addEventListener("scroll", handleViewportUpdate, true);
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+      document.removeEventListener("touchstart", handleOutsideClick);
+      window.removeEventListener("resize", handleViewportUpdate);
+      window.removeEventListener("scroll", handleViewportUpdate, true);
+    };
+  }, [isOpen, onCommit]);
+
+  const popup =
+    isOpen && popupStyle && typeof window !== "undefined"
+      ? createPortal(
+        <div
+          ref={popupRef}
+          className="fixed z-20 rounded-xl border border-slate-200 bg-white p-3.5 shadow-2xl"
+          style={{
+            top: popupStyle.top,
+            left: popupStyle.left,
+            width: popupStyle.width
+          }}
+        >
+          <p className="text-xs text-slate-500">日付を選択（外側タップで閉じる）</p>
+          <div className="mt-2 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setMonth((current) => addMonths(current, -1))}
+              className="rounded-lg px-2 py-1 text-sm text-slate-600 hover:bg-slate-100"
+              aria-label="前の月"
+            >
+              ‹
+            </button>
+            <p className="whitespace-nowrap text-xl font-bold text-slate-900">
+              {format(month, "yyyy年M月")}
+            </p>
+            <button
+              type="button"
+              onClick={() => setMonth((current) => addMonths(current, 1))}
+              className="rounded-lg px-2 py-1 text-sm text-slate-600 hover:bg-slate-100"
+              aria-label="次の月"
+            >
+              ›
+            </button>
+          </div>
+          <div className="mt-3 grid grid-cols-7 gap-x-1 gap-y-2 text-center text-xs font-semibold text-slate-500">
+            {["日", "月", "火", "水", "木", "金", "土"].map((label) => (
+              <span key={`${format(month, "yyyy-MM")}-${label}`}>{label}</span>
+            ))}
+          </div>
+          <div className="mt-2 grid grid-cols-7 gap-x-1 gap-y-2">
+            {buildMonthCells(month).map((cell, index) => {
+              if (!cell) {
+                return <span key={`blank-${format(month, "yyyy-MM")}-${index}`} />;
+              }
+              const active = selected ? isSameDay(cell, selected) : false;
+              return (
+                <button
+                  key={toDateInput(cell)}
+                  type="button"
+                  onClick={() => {
+                    onChange(toDateInput(startOfDay(cell)));
+                    setIsOpen(false);
+                    onCommit?.();
+                  }}
+                  className={`mx-auto h-10 w-10 rounded-lg text-base font-semibold transition ${active
+                    ? "bg-blue-600 text-white"
+                    : "text-slate-900 hover:bg-slate-100"
+                    }`}
+                >
+                  {format(cell, "d")}
+                </button>
+              );
+            })}
+          </div>
+        </div>,
+        document.body
+      )
+      : null;
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <button
+        type="button"
+        onClick={() =>
+          setIsOpen((current) => {
+            const next = !current;
+            if (!next) {
+              onCommit?.();
+            }
+            if (next) {
+              requestAnimationFrame(() => updatePopupPosition());
+            }
+            return next;
+          })
+        }
+        className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-left"
+        aria-expanded={isOpen}
+      >
+        <span
+          className={`text-sm font-semibold ${selected ? "text-slate-900" : "text-slate-400"
+            }`}
+        >
+          {triggerLabel}
+        </span>
+        <span className="text-xs font-semibold text-blue-600">
+          {isOpen ? "閉じる" : "選択"}
+        </span>
+      </button>
+      {popup}
+    </div>
   );
 }
 
@@ -1609,7 +2179,7 @@ function SwipeDeleteCard({
 
   return (
     <div
-      className={`relative overflow-hidden rounded-2xl ${isDeleting ? "pointer-events-none animate-slide-out" : ""
+      className={`relative overflow-visible rounded-2xl ${isDeleting ? "pointer-events-none animate-slide-out" : ""
         }`}
     >
       <div
@@ -1791,6 +2361,29 @@ function PlanDetailContent({ user }: { user: User }) {
     setSavingsEdits((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const pasteFromClipboard = async (onPaste: (value: string) => void) => {
+    if (typeof navigator === "undefined" || !navigator.clipboard?.readText) {
+      return;
+    }
+    try {
+      const text = (await navigator.clipboard.readText()).trim();
+      if (!text) {
+        return;
+      }
+      onPaste(text);
+    } catch (err) {
+      console.error("clipboard_read_failed", err);
+    }
+  };
+
+  const openExternalLink = (raw: string) => {
+    const href = normalizeLink(raw);
+    if (!href || typeof window === "undefined") {
+      return;
+    }
+    window.open(href, "_blank", "noopener,noreferrer");
+  };
+
   const fetchFlightInfo = async (transportId: string) => {
     const draft = transportEdits.find((item) => item.id === transportId);
     if (!draft) {
@@ -1920,6 +2513,8 @@ function PlanDetailContent({ user }: { user: User }) {
         modeConfig.seatKeys?.find((key) => key === base?.seatNumber.key) ??
         modeConfig.seatKeys?.[0] ??
         "";
+      const currencyKey = base?.currency.key || TRANSPORT_CURRENCY_KEYS[0];
+      const currencyValue = normalizePriceCurrency(base?.currency.value ?? "JPY");
       const item: ItemRecord = {
         [modeKey]: modeValue,
         [base?.name.key || TRANSPORT_NAME_KEYS[0]]: "",
@@ -1928,6 +2523,7 @@ function PlanDetailContent({ user }: { user: User }) {
         [base?.depTime.key || TRANSPORT_DEP_KEYS[0]]: "",
         [base?.arrTime.key || TRANSPORT_ARR_KEYS[0]]: "",
         [base?.price.key || TRANSPORT_PRICE_KEYS[0]]: null,
+        [currencyKey]: currencyValue,
         [base?.paid.key || TRANSPORT_PAID_KEYS[0]]: false,
         [base?.notes.key || NOTES_KEYS[0]]: ""
       };
@@ -1947,9 +2543,12 @@ function PlanDetailContent({ user }: { user: User }) {
   const addHotel = () => {
     setHotelEdits((prev) => {
       const base = prev[0];
+      const currencyKey = base?.currency.key || HOTEL_CURRENCY_KEYS[0];
+      const currencyValue = normalizePriceCurrency(base?.currency.value ?? "JPY");
       const item: ItemRecord = {
         [base?.name.key || HOTEL_NAME_KEYS[0]]: "",
         [base?.price.key || HOTEL_PRICE_KEYS[0]]: null,
+        [currencyKey]: currencyValue,
         [base?.checkIn.key || HOTEL_CHECKIN_KEYS[0]]: "",
         [base?.checkOut.key || HOTEL_CHECKOUT_KEYS[0]]: "",
         [base?.notes.key || NOTES_KEYS[0]]: "",
@@ -2083,13 +2682,13 @@ function PlanDetailContent({ user }: { user: User }) {
     transportEdits.forEach((draft) => {
       const value = toNumberOrNull(draft.price.value);
       if (value !== null) {
-        sum += value;
+        sum += convertPriceToYen(value, normalizePriceCurrency(draft.currency.value));
       }
     });
     hotelEdits.forEach((draft) => {
       const value = toNumberOrNull(draft.price.value);
       if (value !== null) {
-        sum += value;
+        sum += convertPriceToYen(value, normalizePriceCurrency(draft.currency.value));
       }
     });
     activityEdits.forEach((draft) => {
@@ -2304,31 +2903,33 @@ function PlanDetailContent({ user }: { user: User }) {
                   <div className="grid gap-3 md:grid-cols-2">
                     <label className="block text-xs font-semibold text-slate-500">
                       出発日
-                      <input
-                        type="date"
-                        value={editValues.startDate}
-                        onChange={(event) =>
-                          setEditValues((prev) => ({
-                            ...prev,
-                            startDate: event.target.value
-                          }))
-                        }
-                        className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                      />
+                      <div className="mt-2">
+                        <PopoverDatePicker
+                          value={editValues.startDate}
+                          onChange={(nextDate) =>
+                            setEditValues((prev) => ({
+                              ...prev,
+                              startDate: nextDate
+                            }))
+                          }
+                          placeholder="出発日を選択"
+                        />
+                      </div>
                     </label>
                     <label className="block text-xs font-semibold text-slate-500">
                       帰宅日
-                      <input
-                        type="date"
-                        value={editValues.endDate}
-                        onChange={(event) =>
-                          setEditValues((prev) => ({
-                            ...prev,
-                            endDate: event.target.value
-                          }))
-                        }
-                        className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                      />
+                      <div className="mt-2">
+                        <PopoverDatePicker
+                          value={editValues.endDate}
+                          onChange={(nextDate) =>
+                            setEditValues((prev) => ({
+                              ...prev,
+                              endDate: nextDate
+                            }))
+                          }
+                          placeholder="帰宅日を選択"
+                        />
+                      </div>
                     </label>
                   </div>
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
@@ -2495,24 +3096,59 @@ function PlanDetailContent({ user }: { user: User }) {
                               </div>
                               {draft.mode.value === "在来線" ? (
                                 <>
-                                  <label className="block text-xs font-semibold text-slate-500">
-                                    金額
-                                    <input
-                                      type="number"
-                                      inputMode="numeric"
-                                      value={draft.price.value}
-                                      onChange={(event) =>
-                                        updateTransport(index, (current) => ({
-                                          ...current,
-                                          price: {
-                                            ...current.price,
-                                            value: event.target.value
-                                          }
-                                        }))
-                                      }
-                                      className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                    />
-                                  </label>
+                                  <div className="grid gap-3 md:grid-cols-2">
+                                    <label className="block text-xs font-semibold text-slate-500">
+                                      金額
+                                      <input
+                                        type="number"
+                                        inputMode="decimal"
+                                        value={draft.price.value}
+                                        onChange={(event) =>
+                                          updateTransport(index, (current) => ({
+                                            ...current,
+                                            price: {
+                                              ...current.price,
+                                              value: event.target.value
+                                            }
+                                          }))
+                                        }
+                                        className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                      />
+                                    </label>
+                                    <label className="block text-xs font-semibold text-slate-500">
+                                      通貨
+                                      <select
+                                        value={normalizePriceCurrency(draft.currency.value)}
+                                        onChange={(event) =>
+                                          updateTransport(index, (current) => ({
+                                            ...current,
+                                            currency: {
+                                              ...current.currency,
+                                              value: normalizePriceCurrency(event.target.value)
+                                            }
+                                          }))
+                                        }
+                                        className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                      >
+                                        <option value="JPY">円 (JPY)</option>
+                                        <option value="USD">ドル (USD)</option>
+                                      </select>
+                                    </label>
+                                  </div>
+                                  {(() => {
+                                    const priceValue = toNumberOrNull(draft.price.value);
+                                    if (
+                                      priceValue === null ||
+                                      normalizePriceCurrency(draft.currency.value) !== "USD"
+                                    ) {
+                                      return null;
+                                    }
+                                    return (
+                                      <p className="mt-2 text-xs text-slate-500">
+                                        円換算: {formatYen(convertPriceToYen(priceValue, "USD"))}
+                                      </p>
+                                    );
+                                  })()}
                                   <div className="mt-4 space-y-3">
                                     <div className="flex items-center justify-between">
                                       <p className="text-xs font-semibold text-slate-500">
@@ -2622,10 +3258,9 @@ function PlanDetailContent({ user }: { user: User }) {
                                                     <label className="block text-[11px] font-semibold text-slate-500">
                                                       日付
                                                       <div className="mt-1">
-                                                        <input
-                                                          type="date"
+                                                        <PopoverDatePicker
                                                           value={transferArrDate}
-                                                          onChange={(event) =>
+                                                          onChange={(nextDate) =>
                                                             updateTransport(index, (current) => ({
                                                               ...current,
                                                               transfers: current.transfers.map(
@@ -2637,16 +3272,16 @@ function PlanDetailContent({ user }: { user: User }) {
                                                                         ...item.arrTime,
                                                                         value: updateDateTimeValue(
                                                                           item.arrTime.value,
-                                                                          event.target.value,
+                                                                          nextDate,
                                                                           undefined
                                                                         )
                                                                       }
                                                                     }
                                                                     : item
                                                               )
-                                                            }), { sort: true })
+                                                            }))
                                                           }
-                                                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                                          onCommit={scheduleTransportSort}
                                                         />
                                                       </div>
                                                     </label>
@@ -2675,8 +3310,9 @@ function PlanDetailContent({ user }: { user: User }) {
                                                                     }
                                                                     : item
                                                               )
-                                                            }), { sort: true })
+                                                            }))
                                                           }
+                                                          onBlur={scheduleTransportSort}
                                                           className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
                                                         />
                                                       </div>
@@ -2694,10 +3330,9 @@ function PlanDetailContent({ user }: { user: User }) {
                                                     <label className="block text-[11px] font-semibold text-slate-500">
                                                       日付
                                                       <div className="mt-1">
-                                                        <input
-                                                          type="date"
+                                                        <PopoverDatePicker
                                                           value={transferDepDate}
-                                                          onChange={(event) =>
+                                                          onChange={(nextDate) =>
                                                             updateTransport(index, (current) => ({
                                                               ...current,
                                                               transfers: current.transfers.map(
@@ -2709,7 +3344,7 @@ function PlanDetailContent({ user }: { user: User }) {
                                                                         ...item.depTime,
                                                                         value: updateDateTimeValue(
                                                                           item.depTime.value,
-                                                                          event.target.value,
+                                                                          nextDate,
                                                                           undefined
                                                                         )
                                                                       }
@@ -2718,7 +3353,7 @@ function PlanDetailContent({ user }: { user: User }) {
                                                               )
                                                             }))
                                                           }
-                                                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                                          onCommit={scheduleTransportSort}
                                                         />
                                                       </div>
                                                     </label>
@@ -2749,6 +3384,7 @@ function PlanDetailContent({ user }: { user: User }) {
                                                               )
                                                             }))
                                                           }
+                                                          onBlur={scheduleTransportSort}
                                                           className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
                                                         />
                                                       </div>
@@ -2784,23 +3420,22 @@ function PlanDetailContent({ user }: { user: User }) {
                                       <label className="block text-[11px] font-semibold text-slate-500">
                                         到着日
                                         <div className="mt-1">
-                                          <input
-                                            type="date"
+                                          <PopoverDatePicker
                                             value={arrDate}
-                                            onChange={(event) =>
+                                            onChange={(nextDate) =>
                                               updateTransport(index, (current) => ({
                                                 ...current,
                                                 arrTime: {
                                                   ...current.arrTime,
                                                   value: updateDateTimeValue(
                                                     current.arrTime.value,
-                                                    event.target.value,
+                                                    nextDate,
                                                     undefined
                                                   )
                                                 }
-                                              }), { sort: true })
+                                              }))
                                             }
-                                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                            onCommit={scheduleTransportSort}
                                           />
                                         </div>
                                       </label>
@@ -2821,8 +3456,9 @@ function PlanDetailContent({ user }: { user: User }) {
                                                     event.target.value
                                                   )
                                                 }
-                                              }), { sort: true })
+                                              }))
                                             }
+                                            onBlur={scheduleTransportSort}
                                             className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
                                           />
                                         </div>
@@ -2868,9 +3504,6 @@ function PlanDetailContent({ user }: { user: User }) {
                                                 </button>
                                               ) : null}
                                             </div>
-                                            {draft.mode.value === "飛行機" ? (
-                                              null
-                                            ) : null}
                                             {flightFetchError &&
                                               flightFetchErrorId === draft.id ? (
                                               <p className="mt-2 text-xs text-rose-500">
@@ -2902,26 +3535,10 @@ function PlanDetailContent({ user }: { user: User }) {
                                   })()}
                                   <div className="grid gap-3 md:grid-cols-2">
                                     <label className="block text-xs font-semibold text-slate-500">
-                                      移動名
-                                      <input
-                                        value={draft.name.value}
-                                        onChange={(event) =>
-                                          updateTransport(index, (current) => ({
-                                            ...current,
-                                            name: {
-                                              ...current.name,
-                                              value: event.target.value
-                                            }
-                                          }))
-                                        }
-                                        className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                      />
-                                    </label>
-                                    <label className="block text-xs font-semibold text-slate-500">
                                       金額
                                       <input
                                         type="number"
-                                        inputMode="numeric"
+                                        inputMode="decimal"
                                         value={draft.price.value}
                                         onChange={(event) =>
                                           updateTransport(index, (current) => ({
@@ -2935,7 +3552,40 @@ function PlanDetailContent({ user }: { user: User }) {
                                         className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                                       />
                                     </label>
+                                    <label className="block text-xs font-semibold text-slate-500">
+                                      通貨
+                                      <select
+                                        value={normalizePriceCurrency(draft.currency.value)}
+                                        onChange={(event) =>
+                                          updateTransport(index, (current) => ({
+                                            ...current,
+                                            currency: {
+                                              ...current.currency,
+                                              value: normalizePriceCurrency(event.target.value)
+                                            }
+                                          }))
+                                        }
+                                        className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                      >
+                                        <option value="JPY">円 (JPY)</option>
+                                        <option value="USD">ドル (USD)</option>
+                                      </select>
+                                    </label>
                                   </div>
+                                  {(() => {
+                                    const priceValue = toNumberOrNull(draft.price.value);
+                                    if (
+                                      priceValue === null ||
+                                      normalizePriceCurrency(draft.currency.value) !== "USD"
+                                    ) {
+                                      return null;
+                                    }
+                                    return (
+                                      <p className="mt-2 text-xs text-slate-500">
+                                        円換算: {formatYen(convertPriceToYen(priceValue, "USD"))}
+                                      </p>
+                                    );
+                                  })()}
                                   <div className="mt-3 grid gap-3 md:grid-cols-2">
                                     <label className="block text-xs font-semibold text-slate-500">
                                       出発地
@@ -2975,24 +3625,25 @@ function PlanDetailContent({ user }: { user: User }) {
                                       <div className="mt-2 grid gap-2 sm:grid-cols-2">
                                         <label className="block text-[11px] font-semibold text-slate-400">
                                           日付
-                                          <input
-                                            type="date"
-                                            value={depDate}
-                                            onChange={(event) =>
-                                              updateTransport(index, (current) => ({
-                                                ...current,
-                                                depTime: {
-                                                  ...current.depTime,
-                                                  value: updateDateTimeValue(
-                                                    current.depTime.value,
-                                                    event.target.value,
-                                                    undefined
-                                                  )
-                                                }
-                                              }), { sort: true })
-                                            }
-                                            className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                          />
+                                          <div className="mt-1">
+                                            <PopoverDatePicker
+                                              value={depDate}
+                                              onChange={(nextDate) =>
+                                                updateTransport(index, (current) => ({
+                                                  ...current,
+                                                  depTime: {
+                                                    ...current.depTime,
+                                                    value: updateDateTimeValue(
+                                                      current.depTime.value,
+                                                      nextDate,
+                                                      undefined
+                                                    )
+                                                  }
+                                                }))
+                                              }
+                                              onCommit={scheduleTransportSort}
+                                            />
+                                          </div>
                                         </label>
                                         <label className="block text-[11px] font-semibold text-slate-400">
                                           時刻
@@ -3010,8 +3661,9 @@ function PlanDetailContent({ user }: { user: User }) {
                                                     event.target.value
                                                   )
                                                 }
-                                              }), { sort: true })
+                                              }))
                                             }
+                                            onBlur={scheduleTransportSort}
                                             className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                                           />
                                         </label>
@@ -3024,24 +3676,25 @@ function PlanDetailContent({ user }: { user: User }) {
                                       <div className="mt-2 grid gap-2 sm:grid-cols-2">
                                         <label className="block text-[11px] font-semibold text-slate-400">
                                           日付
-                                          <input
-                                            type="date"
-                                            value={arrDate}
-                                            onChange={(event) =>
-                                              updateTransport(index, (current) => ({
-                                                ...current,
-                                                arrTime: {
-                                                  ...current.arrTime,
-                                                  value: updateDateTimeValue(
-                                                    current.arrTime.value,
-                                                    event.target.value,
-                                                    undefined
-                                                  )
-                                                }
-                                              }), { sort: true })
-                                            }
-                                            className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                          />
+                                          <div className="mt-1">
+                                            <PopoverDatePicker
+                                              value={arrDate}
+                                              onChange={(nextDate) =>
+                                                updateTransport(index, (current) => ({
+                                                  ...current,
+                                                  arrTime: {
+                                                    ...current.arrTime,
+                                                    value: updateDateTimeValue(
+                                                      current.arrTime.value,
+                                                      nextDate,
+                                                      undefined
+                                                    )
+                                                  }
+                                                }))
+                                              }
+                                              onCommit={scheduleTransportSort}
+                                            />
+                                          </div>
                                         </label>
                                         <label className="block text-[11px] font-semibold text-slate-400">
                                           時刻
@@ -3059,8 +3712,9 @@ function PlanDetailContent({ user }: { user: User }) {
                                                     event.target.value
                                                   )
                                                 }
-                                              }), { sort: true })
+                                              }))
                                             }
+                                            onBlur={scheduleTransportSort}
                                             className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                                           />
                                         </label>
@@ -3132,7 +3786,12 @@ function PlanDetailContent({ user }: { user: User }) {
                       seatLabel && modeConfig.seatKeys?.length
                         ? getStringField(item, modeConfig.seatKeys)
                         : "";
-                    const price = getNumberField(item, TRANSPORT_PRICE_KEYS);
+                    const priceYen = getNumberField(item, TRANSPORT_PRICE_KEYS);
+                    const originalPrice = getNumberField(
+                      item,
+                      TRANSPORT_ORIGINAL_PRICE_KEYS
+                    );
+                    const currency = getItemCurrency(item, TRANSPORT_CURRENCY_KEYS);
                     const isPaid = getBooleanField(item, TRANSPORT_PAID_KEYS);
                     let from = getLocationField(item, TRANSPORT_FROM_KEYS);
                     if (!from) {
@@ -3162,9 +3821,9 @@ function PlanDetailContent({ user }: { user: User }) {
                           <h4 className="text-base font-semibold text-slate-900">
                             {name}
                           </h4>
-                          {price !== null ? (
+                          {priceYen !== null ? (
                             <span className="text-base font-semibold text-slate-900">
-                              {formatYen(price)}
+                              {formatPriceLabel(priceYen, currency, originalPrice)}
                             </span>
                           ) : null}
                         </div>
@@ -3267,13 +3926,18 @@ function PlanDetailContent({ user }: { user: User }) {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {hotelEdits.map((draft, index) => (
-                      <SwipeDeleteCard
-                        key={`hotel-edit-${index}`}
-                        enabled={canEdit}
-                        onDelete={() => removeHotel(index)}
-                      >
-                        <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
+                    {hotelEdits.map((draft, index) => {
+                      const checkInDate = extractDateOnly(draft.checkIn.value);
+                      const checkOutDate = extractDateOnly(draft.checkOut.value);
+                      const originalCheckInDate = extractDateOnly(draft.checkIn.original);
+                      const originalCheckOutDate = extractDateOnly(draft.checkOut.original);
+                      return (
+                        <SwipeDeleteCard
+                          key={`hotel-edit-${index}`}
+                          enabled={canEdit}
+                          onDelete={() => removeHotel(index)}
+                        >
+                          <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
                           <div className="grid gap-3 md:grid-cols-2">
                             <label className="block text-xs font-semibold text-slate-500">
                               宿泊名
@@ -3288,57 +3952,82 @@ function PlanDetailContent({ user }: { user: User }) {
                                 className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                               />
                             </label>
-                            <label className="block text-xs font-semibold text-slate-500">
-                              金額
-                              <input
-                                type="number"
-                                inputMode="numeric"
-                                value={draft.price.value}
-                                onChange={(event) =>
-                                  updateHotel(index, (current) => ({
-                                    ...current,
-                                    price: { ...current.price, value: event.target.value }
-                                  }))
-                                }
-                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                              />
-                            </label>
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <label className="block text-xs font-semibold text-slate-500">
+                                金額
+                                <input
+                                  type="number"
+                                  inputMode="decimal"
+                                  value={draft.price.value}
+                                  onChange={(event) =>
+                                    updateHotel(index, (current) => ({
+                                      ...current,
+                                      price: { ...current.price, value: event.target.value }
+                                    }))
+                                  }
+                                  className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                />
+                              </label>
+                              <label className="block text-xs font-semibold text-slate-500">
+                                通貨
+                                <select
+                                  value={normalizePriceCurrency(draft.currency.value)}
+                                  onChange={(event) =>
+                                    updateHotel(index, (current) => ({
+                                      ...current,
+                                      currency: {
+                                        ...current.currency,
+                                        value: normalizePriceCurrency(event.target.value)
+                                      }
+                                    }))
+                                  }
+                                  className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                >
+                                  <option value="JPY">円 (JPY)</option>
+                                  <option value="USD">ドル (USD)</option>
+                                </select>
+                              </label>
+                            </div>
                           </div>
-                          <div className="mt-3 grid gap-3 md:grid-cols-2">
-                            <label className="block text-xs font-semibold text-slate-500">
-                              チェックイン
-                              <input
-                                value={draft.checkIn.value}
-                                onChange={(event) =>
+                          {(() => {
+                            const priceValue = toNumberOrNull(draft.price.value);
+                            if (
+                              priceValue === null ||
+                              normalizePriceCurrency(draft.currency.value) !== "USD"
+                            ) {
+                              return null;
+                            }
+                            return (
+                              <p className="mt-2 text-xs text-slate-500">
+                                円換算: {formatYen(convertPriceToYen(priceValue, "USD"))}
+                              </p>
+                            );
+                          })()}
+                          <div className="mt-3">
+                            <p className="text-xs font-semibold text-slate-500">
+                              宿泊日程
+                            </p>
+                            <div className="mt-2">
+                              <StayDateRangePicker
+                                startDate={checkInDate}
+                                endDate={checkOutDate}
+                                originalStartDate={originalCheckInDate}
+                                originalEndDate={originalCheckOutDate}
+                                onChange={(nextStartDate, nextEndDate) =>
                                   updateHotel(index, (current) => ({
                                     ...current,
                                     checkIn: {
                                       ...current.checkIn,
-                                      value: event.target.value
-                                    }
-                                  }))
-                                }
-                                placeholder="例: 2025-11-23 15:00"
-                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                              />
-                            </label>
-                            <label className="block text-xs font-semibold text-slate-500">
-                              チェックアウト
-                              <input
-                                value={draft.checkOut.value}
-                                onChange={(event) =>
-                                  updateHotel(index, (current) => ({
-                                    ...current,
+                                      value: nextStartDate
+                                    },
                                     checkOut: {
                                       ...current.checkOut,
-                                      value: event.target.value
+                                      value: nextEndDate
                                     }
                                   }))
                                 }
-                                placeholder="例: 2025-11-24 10:00"
-                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                               />
-                            </label>
+                            </div>
                           </div>
                           <label className="mt-3 block text-xs font-semibold text-slate-500">
                             メモ
@@ -3356,21 +4045,47 @@ function PlanDetailContent({ user }: { user: User }) {
                           </label>
                           <label className="mt-3 block text-xs font-semibold text-slate-500">
                             予約リンク
-                            <input
-                              value={draft.link.value}
-                              onChange={(event) =>
-                                updateHotel(index, (current) => ({
-                                  ...current,
-                                  link: { ...current.link, value: event.target.value }
-                                }))
-                              }
-                              placeholder="https://..."
-                              className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                            />
+                            <div className="mt-2 flex items-center gap-2">
+                              <input
+                                value={draft.link.value}
+                                onChange={(event) =>
+                                  updateHotel(index, (current) => ({
+                                    ...current,
+                                    link: { ...current.link, value: event.target.value }
+                                  }))
+                                }
+                                placeholder="https://..."
+                                className="w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void pasteFromClipboard((text) =>
+                                    updateHotel(index, (current) => ({
+                                      ...current,
+                                      link: { ...current.link, value: text }
+                                    }))
+                                  )
+                                }
+                                className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                              >
+                                貼り付け
+                              </button>
+                              {draft.link.value.trim() ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openExternalLink(draft.link.value)}
+                                  className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                                >
+                                  開く
+                                </button>
+                              ) : null}
+                            </div>
                           </label>
-                        </div>
-                      </SwipeDeleteCard>
-                    ))}
+                          </div>
+                        </SwipeDeleteCard>
+                      );
+                    })}
                   </div>
                 )
               ) : hotels.length === 0 ? (
@@ -3383,13 +4098,14 @@ function PlanDetailContent({ user }: { user: User }) {
                     const name =
                       getStringField(item, HOTEL_NAME_KEYS) ||
                       `宿泊 ${index + 1}`;
-                    const price = getNumberField(item, HOTEL_PRICE_KEYS);
-                    const checkIn = formatShortDateTime(
-                      getDateField(item, HOTEL_CHECKIN_KEYS)
+                    const priceYen = getNumberField(item, HOTEL_PRICE_KEYS);
+                    const originalPrice = getNumberField(
+                      item,
+                      HOTEL_ORIGINAL_PRICE_KEYS
                     );
-                    const checkOut = formatShortDateTime(
-                      getDateField(item, HOTEL_CHECKOUT_KEYS)
-                    );
+                    const currency = getItemCurrency(item, HOTEL_CURRENCY_KEYS);
+                    const checkIn = formatDate(getDateField(item, HOTEL_CHECKIN_KEYS));
+                    const checkOut = formatDate(getDateField(item, HOTEL_CHECKOUT_KEYS));
                     const notes = getStringField(item, NOTES_KEYS);
                     const link = getLinkField(item);
                     const linkHref = link ? normalizeLink(link) : null;
@@ -3403,9 +4119,9 @@ function PlanDetailContent({ user }: { user: User }) {
                           <h4 className="text-base font-semibold text-slate-900">
                             {name}
                           </h4>
-                          {price !== null ? (
+                          {priceYen !== null ? (
                             <span className="text-base font-semibold text-slate-900">
-                              {formatYen(price)}
+                              {formatPriceLabel(priceYen, currency, originalPrice)}
                             </span>
                           ) : null}
                         </div>
@@ -3505,17 +4221,42 @@ function PlanDetailContent({ user }: { user: User }) {
                           </label>
                           <label className="mt-3 block text-xs font-semibold text-slate-500">
                             予約リンク
-                            <input
-                              value={draft.link.value}
-                              onChange={(event) =>
-                                updateActivity(index, (current) => ({
-                                  ...current,
-                                  link: { ...current.link, value: event.target.value }
-                                }))
-                              }
-                              placeholder="https://..."
-                              className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                            />
+                            <div className="mt-2 flex items-center gap-2">
+                              <input
+                                value={draft.link.value}
+                                onChange={(event) =>
+                                  updateActivity(index, (current) => ({
+                                    ...current,
+                                    link: { ...current.link, value: event.target.value }
+                                  }))
+                                }
+                                placeholder="https://..."
+                                className="w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void pasteFromClipboard((text) =>
+                                    updateActivity(index, (current) => ({
+                                      ...current,
+                                      link: { ...current.link, value: text }
+                                    }))
+                                  )
+                                }
+                                className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                              >
+                                貼り付け
+                              </button>
+                              {draft.link.value.trim() ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openExternalLink(draft.link.value)}
+                                  className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                                >
+                                  開く
+                                </button>
+                              ) : null}
+                            </div>
                           </label>
                         </div>
                       </SwipeDeleteCard>
