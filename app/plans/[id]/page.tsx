@@ -113,6 +113,7 @@ type HotelDraft = {
   name: FieldDraft;
   price: NumberDraft;
   currency: FieldDraft;
+  paid: BooleanDraft;
   checkIn: FieldDraft;
   checkOut: FieldDraft;
   notes: FieldDraft;
@@ -332,6 +333,13 @@ const HOTEL_CURRENCY_KEYS = [
   "currencyCode",
   "priceCurrency",
   "costCurrency"
+];
+const HOTEL_PAID_KEYS = [
+  "isPaid",
+  "paid",
+  "isPaymentDone",
+  "paymentDone",
+  "isSettled"
 ];
 const HOTEL_CHECKIN_KEYS = ["checkIn", "checkInDate", "startDate"];
 const HOTEL_CHECKOUT_KEYS = ["checkOut", "checkOutDate", "endDate"];
@@ -1371,6 +1379,7 @@ function buildHotelDrafts(items: ItemRecord[]) {
         normalizePriceCurrency(currency.value)
       ),
       currency,
+      paid: buildBooleanDraft(item, HOTEL_PAID_KEYS),
       checkIn: buildDateDraft(item, HOTEL_CHECKIN_KEYS),
       checkOut: buildDateDraft(item, HOTEL_CHECKOUT_KEYS),
       notes: buildStringDraft(item, NOTES_KEYS),
@@ -1531,6 +1540,7 @@ function applyHotelDrafts(drafts: HotelDraft[]) {
       HOTEL_ORIGINAL_PRICE_KEYS
     );
     applyStringDraft(nextItem, draft.currency);
+    applyBooleanDraft(nextItem, draft.paid);
     applyStringDraft(nextItem, draft.checkIn);
     applyStringDraft(nextItem, draft.checkOut);
     applyStringDraft(nextItem, draft.notes);
@@ -1641,12 +1651,14 @@ function isInRange(day: Date, start: Date | null, end: Date | null) {
 }
 
 function StayDateRangePicker({
+  title = "宿泊日程",
   startDate,
   endDate,
   originalStartDate,
   originalEndDate,
   onChange
 }: {
+  title?: string;
   startDate: string;
   endDate: string;
   originalStartDate: string;
@@ -1655,7 +1667,13 @@ function StayDateRangePicker({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [anchorDate, setAnchorDate] = useState<Date | null>(null);
-  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const popupRef = useRef<HTMLDivElement | null>(null);
+  const [popupStyle, setPopupStyle] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
 
   const start = parseDateInputValue(startDate);
   const end = parseDateInputValue(endDate);
@@ -1679,23 +1697,53 @@ function StayDateRangePicker({
     setAnchorDate(null);
   }, [startDate]);
 
+  const updatePopupPosition = () => {
+    const anchor = wrapperRef.current;
+    if (!anchor || typeof window === "undefined") {
+      return;
+    }
+    const rect = anchor.getBoundingClientRect();
+    const viewportPadding = 12;
+    const width = Math.min(760, window.innerWidth - viewportPadding * 2);
+    const centeredLeft = rect.left + rect.width / 2 - width / 2;
+    const left = Math.max(
+      viewportPadding,
+      Math.min(centeredLeft, window.innerWidth - width - viewportPadding)
+    );
+    const top = rect.bottom + 8;
+    setPopupStyle({ top, left, width });
+  };
+
   useEffect(() => {
     if (!isOpen) {
       return;
     }
+    updatePopupPosition();
+
     const handleOutsideClick = (event: MouseEvent | TouchEvent) => {
       const target = event.target as Node | null;
-      if (!target || popoverRef.current?.contains(target)) {
+      if (
+        !target ||
+        wrapperRef.current?.contains(target) ||
+        popupRef.current?.contains(target)
+      ) {
         return;
       }
       setIsOpen(false);
       setAnchorDate(null);
     };
+    const handleViewportUpdate = () => {
+      updatePopupPosition();
+    };
     document.addEventListener("mousedown", handleOutsideClick);
     document.addEventListener("touchstart", handleOutsideClick, { passive: true });
+    window.addEventListener("resize", handleViewportUpdate);
+    window.addEventListener("scroll", handleViewportUpdate, true);
     return () => {
       document.removeEventListener("mousedown", handleOutsideClick);
       document.removeEventListener("touchstart", handleOutsideClick);
+      window.removeEventListener("resize", handleViewportUpdate);
+      window.removeEventListener("scroll", handleViewportUpdate, true);
     };
   }, [isOpen]);
 
@@ -1734,7 +1782,7 @@ function StayDateRangePicker({
           {format(month, "yyyy年M月")}
         </p>
         <div className="mt-3 grid grid-cols-7 gap-y-2 text-center text-xs text-slate-500">
-          {["(日)", "(月)", "(火)", "(水)", "(木)", "(金)", "(土)"].map((label) => (
+          {["日", "月", "火", "水", "木", "金", "土"].map((label) => (
             <span key={`${format(month, "yyyy-MM")}-${label}`}>{label}</span>
           ))}
         </div>
@@ -1768,8 +1816,76 @@ function StayDateRangePicker({
     );
   };
 
+  const popup =
+    isOpen && popupStyle && typeof window !== "undefined"
+      ? createPortal(
+        <div
+          ref={popupRef}
+          className="fixed z-[1200] rounded-2xl border border-white/65 bg-white/72 p-3 shadow-[0_26px_72px_-28px_rgba(15,23,42,0.65)] backdrop-blur-2xl"
+          style={{
+            top: popupStyle.top,
+            left: popupStyle.left,
+            width: popupStyle.width
+          }}
+        >
+          <p className="text-xs text-slate-500">
+            {anchorDate
+              ? "終了日を選択してください（外側タップで閉じる）"
+              : "開始日→終了日を順に選択（外側タップで閉じる）"}
+          </p>
+          <div className="mt-2 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setLeftMonth((current) => addMonths(current, -1))}
+              className="rounded-lg border border-white/80 bg-white/60 px-3 py-1 text-xs font-semibold text-slate-600 backdrop-blur hover:bg-white/80"
+              aria-label="前の月"
+            >
+              前月
+            </button>
+            <button
+              type="button"
+              onClick={() => setLeftMonth((current) => addMonths(current, 1))}
+              className="rounded-lg border border-white/80 bg-white/60 px-3 py-1 text-xs font-semibold text-slate-600 backdrop-blur hover:bg-white/80"
+              aria-label="次の月"
+            >
+              次月
+            </button>
+          </div>
+          <div className="mt-2 grid gap-4 md:grid-cols-2">
+            <div>{renderMonth(leftMonth)}</div>
+            <div className="hidden md:block">{renderMonth(rightMonth)}</div>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-200 pt-3">
+            {originalStartDate && originalEndDate ? (
+              <button
+                type="button"
+                onClick={restoreOriginalRange}
+                className="rounded-full border border-blue-400/70 bg-white/55 px-4 py-1.5 text-sm font-semibold text-blue-700 backdrop-blur"
+              >
+                元の日程
+              </button>
+            ) : null}
+            {[1, 2, 3, 7].map((nights) => (
+              <button
+                key={`stay-${nights}`}
+                type="button"
+                onClick={() => applyNights(nights)}
+                className="rounded-full border border-white/80 bg-white/55 px-4 py-1.5 text-sm font-semibold text-slate-700 backdrop-blur"
+              >
+                +{nights}日
+              </button>
+            ))}
+          </div>
+        </div>,
+        document.body
+      )
+      : null;
+
   return (
-    <div ref={popoverRef} className="relative rounded-xl border border-slate-200 bg-slate-50 p-3">
+    <div
+      ref={wrapperRef}
+      className="relative rounded-2xl border border-white/60 bg-white/45 p-3 shadow-[0_16px_38px_-24px_rgba(15,23,42,0.55)] backdrop-blur-xl"
+    >
       <button
         type="button"
         onClick={() =>
@@ -1781,11 +1897,11 @@ function StayDateRangePicker({
             return next;
           })
         }
-        className="flex w-full items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-left"
+        className="flex w-full items-center justify-between gap-4 rounded-xl border border-white/70 bg-white/65 px-4 py-2.5 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-md"
         aria-expanded={isOpen}
       >
         <div>
-          <p className="text-[10px] font-semibold text-slate-500">宿泊日程</p>
+          <p className="text-[10px] font-semibold text-slate-500">{title}</p>
           <p className="mt-1 text-base font-semibold leading-tight text-slate-900">
             {rangeLabel}
           </p>
@@ -1794,60 +1910,7 @@ function StayDateRangePicker({
           {isOpen ? "閉じる" : "選択"}
         </span>
       </button>
-      {isOpen ? (
-        <div className="absolute left-0 right-0 top-[calc(100%+8px)] z-40 rounded-xl border border-slate-200 bg-white p-3 shadow-2xl">
-          <p className="text-xs text-slate-500">
-            {anchorDate
-              ? "終了日を選択してください（外側タップで閉じる）"
-              : "開始日→終了日を順に選択（外側タップで閉じる）"}
-          </p>
-          <div className="mt-2 flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => setLeftMonth((current) => addMonths(current, -1))}
-              className="rounded-lg px-2 py-1 text-sm text-slate-600 hover:bg-slate-100"
-              aria-label="前の月"
-            >
-              ‹
-            </button>
-            <button
-              type="button"
-              onClick={() => setLeftMonth((current) => addMonths(current, 1))}
-              className="rounded-lg px-2 py-1 text-sm text-slate-600 hover:bg-slate-100"
-              aria-label="次の月"
-            >
-              ›
-            </button>
-          </div>
-          <div className="mt-2 grid gap-4 md:grid-cols-2">
-            <div>
-              {renderMonth(leftMonth)}
-            </div>
-            <div className="hidden md:block">{renderMonth(rightMonth)}</div>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-200 pt-3">
-            {originalStartDate && originalEndDate ? (
-              <button
-                type="button"
-                onClick={restoreOriginalRange}
-                className="rounded-full border border-blue-500 px-4 py-1.5 text-sm font-semibold text-blue-600"
-              >
-                元の日程
-              </button>
-            ) : null}
-            {[1, 2, 3, 7].map((nights) => (
-              <button
-                key={`stay-${nights}`}
-                type="button"
-                onClick={() => applyNights(nights)}
-                className="rounded-full border border-slate-300 px-4 py-1.5 text-sm font-semibold text-slate-700"
-              >
-                +{nights}日
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : null}
+      {popup}
     </div>
   );
 }
@@ -1935,7 +1998,7 @@ function PopoverDatePicker({
       ? createPortal(
         <div
           ref={popupRef}
-          className="fixed z-20 rounded-xl border border-slate-200 bg-white p-3.5 shadow-2xl"
+          className="fixed z-[1200] rounded-2xl border border-white/65 bg-white/72 p-3.5 shadow-[0_26px_72px_-28px_rgba(15,23,42,0.65)] backdrop-blur-2xl"
           style={{
             top: popupStyle.top,
             left: popupStyle.left,
@@ -1943,26 +2006,28 @@ function PopoverDatePicker({
           }}
         >
           <p className="text-xs text-slate-500">日付を選択（外側タップで閉じる）</p>
-          <div className="mt-2 flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => setMonth((current) => addMonths(current, -1))}
-              className="rounded-lg px-2 py-1 text-sm text-slate-600 hover:bg-slate-100"
-              aria-label="前の月"
-            >
-              ‹
-            </button>
+          <div className="mt-2 flex items-center justify-between gap-2">
             <p className="whitespace-nowrap text-xl font-bold text-slate-900">
               {format(month, "yyyy年M月")}
             </p>
-            <button
-              type="button"
-              onClick={() => setMonth((current) => addMonths(current, 1))}
-              className="rounded-lg px-2 py-1 text-sm text-slate-600 hover:bg-slate-100"
-              aria-label="次の月"
-            >
-              ›
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setMonth((current) => addMonths(current, -1))}
+                className="rounded-lg border border-white/80 bg-white/60 px-3 py-1 text-xs font-semibold text-slate-600 backdrop-blur hover:bg-white/80"
+                aria-label="前の月"
+              >
+                前月
+              </button>
+              <button
+                type="button"
+                onClick={() => setMonth((current) => addMonths(current, 1))}
+                className="rounded-lg border border-white/80 bg-white/60 px-3 py-1 text-xs font-semibold text-slate-600 backdrop-blur hover:bg-white/80"
+                aria-label="次の月"
+              >
+                次月
+              </button>
+            </div>
           </div>
           <div className="mt-3 grid grid-cols-7 gap-x-1 gap-y-2 text-center text-xs font-semibold text-slate-500">
             {["日", "月", "火", "水", "木", "金", "土"].map((label) => (
@@ -2015,7 +2080,7 @@ function PopoverDatePicker({
             return next;
           })
         }
-        className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-left"
+        className="flex w-full items-center justify-between gap-3 rounded-xl border border-white/70 bg-white/60 px-3.5 py-2.5 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-md"
         aria-expanded={isOpen}
       >
         <span
@@ -2549,6 +2614,7 @@ function PlanDetailContent({ user }: { user: User }) {
         [base?.name.key || HOTEL_NAME_KEYS[0]]: "",
         [base?.price.key || HOTEL_PRICE_KEYS[0]]: null,
         [currencyKey]: currencyValue,
+        [base?.paid.key || HOTEL_PAID_KEYS[0]]: false,
         [base?.checkIn.key || HOTEL_CHECKIN_KEYS[0]]: "",
         [base?.checkOut.key || HOTEL_CHECKOUT_KEYS[0]]: "",
         [base?.notes.key || NOTES_KEYS[0]]: "",
@@ -2661,7 +2727,7 @@ function PlanDetailContent({ user }: { user: User }) {
   }, [plan?.path]);
 
   const authorName = user.displayName ?? user.email ?? "ユーザー";
-  const savedTotal =
+  const planSavedTotal =
     Array.isArray(plan?.savingsHistory) && plan.savingsHistory.length > 0
       ? sumSavingsHistory(plan.savingsHistory)
       : typeof plan?.savedAmount === "number"
@@ -2677,6 +2743,15 @@ function PlanDetailContent({ user }: { user: User }) {
     Boolean(plan) &&
     (plan?.userId === user.uid || plan?.ownerId === user.uid || ownsByPath);
   const canEdit = Boolean(plan?.path) && isOwner;
+  const editedSavingsTotal = useMemo(
+    () =>
+      savingsEdits.reduce((sum, draft) => {
+        const value = toNumberOrNull(draft.value);
+        return sum + (value ?? 0);
+      }, 0),
+    [savingsEdits]
+  );
+  const savedTotal = canEdit ? editedSavingsTotal : planSavedTotal;
   const computedTotalCost = useMemo(() => {
     let sum = 0;
     transportEdits.forEach((draft) => {
@@ -2704,12 +2779,64 @@ function PlanDetailContent({ user }: { user: User }) {
     : typeof plan?.totalCost === "number"
       ? plan.totalCost
       : null;
-  const remainingCost =
-    totalCost !== null ? Math.max(0, totalCost - savedTotal) : null;
   const transportations = Array.isArray(plan?.transportations)
     ? plan.transportations
     : [];
   const hotels = Array.isArray(plan?.hotels) ? plan.hotels : [];
+  const paidTotalFromDrafts = useMemo(() => {
+    let sum = 0;
+    transportEdits.forEach((draft) => {
+      if (draft.paid.value !== true) {
+        return;
+      }
+      const value = toNumberOrNull(draft.price.value);
+      if (value !== null) {
+        sum += convertPriceToYen(value, normalizePriceCurrency(draft.currency.value));
+      }
+    });
+    hotelEdits.forEach((draft) => {
+      if (draft.paid.value !== true) {
+        return;
+      }
+      const value = toNumberOrNull(draft.price.value);
+      if (value !== null) {
+        sum += convertPriceToYen(value, normalizePriceCurrency(draft.currency.value));
+      }
+    });
+    return sum;
+  }, [transportEdits, hotelEdits]);
+  const paidTotalFromPlan = useMemo(() => {
+    let sum = 0;
+    transportations.forEach((item) => {
+      const isPaid = getBooleanField(item, TRANSPORT_PAID_KEYS);
+      if (isPaid !== true) {
+        return;
+      }
+      const value = getNumberField(item, TRANSPORT_PRICE_KEYS);
+      if (value !== null) {
+        sum += Math.round(value);
+      }
+    });
+    hotels.forEach((item) => {
+      const isPaid = getBooleanField(item, HOTEL_PAID_KEYS);
+      if (isPaid !== true) {
+        return;
+      }
+      const value = getNumberField(item, HOTEL_PRICE_KEYS);
+      if (value !== null) {
+        sum += Math.round(value);
+      }
+    });
+    return sum;
+  }, [transportations, hotels]);
+  const paidTotal = canEdit ? paidTotalFromDrafts : paidTotalFromPlan;
+  const coveredTotal = savedTotal + paidTotal;
+  const remainingCost =
+    totalCost !== null ? Math.max(0, totalCost - coveredTotal) : null;
+  const progressPercent =
+    totalCost && totalCost > 0
+      ? Math.min(100, Math.round((coveredTotal / totalCost) * 100))
+      : 0;
   const activities = Array.isArray(plan?.activities) ? plan.activities : [];
   const packingList = Array.isArray(plan?.packingList) ? plan.packingList : [];
   const hasEditError = Boolean(editError);
@@ -2720,12 +2847,10 @@ function PlanDetailContent({ user }: { user: User }) {
     [transportations]
   );
 
-  const progress = plan
-    ? getPlanProgress({
-      ...plan,
-      totalCost: typeof totalCost === "number" ? totalCost : plan.totalCost
-    })
-    : null;
+  const progress =
+    totalCost !== null && remainingCost !== null
+      ? { remaining: remainingCost, percent: progressPercent }
+      : null;
 
   useEffect(() => {
     lastSavedRef.current = null;
@@ -2900,38 +3025,25 @@ function PlanDetailContent({ user }: { user: User }) {
                       className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                     />
                   </label>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <label className="block text-xs font-semibold text-slate-500">
-                      出発日
-                      <div className="mt-2">
-                        <PopoverDatePicker
-                          value={editValues.startDate}
-                          onChange={(nextDate) =>
-                            setEditValues((prev) => ({
-                              ...prev,
-                              startDate: nextDate
-                            }))
-                          }
-                          placeholder="出発日を選択"
-                        />
-                      </div>
-                    </label>
-                    <label className="block text-xs font-semibold text-slate-500">
-                      帰宅日
-                      <div className="mt-2">
-                        <PopoverDatePicker
-                          value={editValues.endDate}
-                          onChange={(nextDate) =>
-                            setEditValues((prev) => ({
-                              ...prev,
-                              endDate: nextDate
-                            }))
-                          }
-                          placeholder="帰宅日を選択"
-                        />
-                      </div>
-                    </label>
-                  </div>
+                  <label className="block text-xs font-semibold text-slate-500">
+                    旅行日程
+                    <div className="mt-2">
+                      <StayDateRangePicker
+                        title="旅行日程"
+                        startDate={editValues.startDate}
+                        endDate={editValues.endDate}
+                        originalStartDate={toDateInputValue(plan.startDate)}
+                        originalEndDate={toDateInputValue(plan.endDate)}
+                        onChange={(nextStartDate, nextEndDate) =>
+                          setEditValues((prev) => ({
+                            ...prev,
+                            startDate: nextStartDate,
+                            endDate: nextEndDate
+                          }))
+                        }
+                      />
+                    </div>
+                  </label>
                   <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
                     合計費用（自動）
                     <div className="mt-2 text-sm font-semibold text-slate-900">
@@ -4029,6 +4141,23 @@ function PlanDetailContent({ user }: { user: User }) {
                               />
                             </div>
                           </div>
+                          <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-500">
+                            <input
+                              type="checkbox"
+                              checked={draft.paid.value === true}
+                              onChange={(event) =>
+                                updateHotel(index, (current) => ({
+                                  ...current,
+                                  paid: {
+                                    ...current.paid,
+                                    value: event.target.checked
+                                  }
+                                }))
+                              }
+                              className="h-4 w-4 rounded border-slate-300"
+                            />
+                            支払い済み
+                          </label>
                           <label className="mt-3 block text-xs font-semibold text-slate-500">
                             メモ
                             <textarea
@@ -4104,6 +4233,7 @@ function PlanDetailContent({ user }: { user: User }) {
                       HOTEL_ORIGINAL_PRICE_KEYS
                     );
                     const currency = getItemCurrency(item, HOTEL_CURRENCY_KEYS);
+                    const isPaid = getBooleanField(item, HOTEL_PAID_KEYS);
                     const checkIn = formatDate(getDateField(item, HOTEL_CHECKIN_KEYS));
                     const checkOut = formatDate(getDateField(item, HOTEL_CHECKOUT_KEYS));
                     const notes = getStringField(item, NOTES_KEYS);
@@ -4126,6 +4256,11 @@ function PlanDetailContent({ user }: { user: User }) {
                           ) : null}
                         </div>
                         <div className="mt-3 space-y-1 text-xs text-slate-500">
+                          {isPaid !== null ? (
+                            <p className="font-semibold text-emerald-600">
+                              {isPaid ? "支払い済み" : "未払い"}
+                            </p>
+                          ) : null}
                           {(checkIn || checkOut) && (
                             <div className="flex items-center justify-between gap-4">
                               <span>チェックイン: {checkIn || "—"}</span>
@@ -4430,12 +4565,18 @@ function PlanDetailContent({ user }: { user: User }) {
                     {remainingCost !== null ? formatYen(remainingCost) : "—"}
                   </span>
                 </div>
+                <div className="mt-3 flex items-center justify-between text-sm">
+                  <span className="text-slate-500">支払い済み</span>
+                  <span className="font-semibold text-slate-900">
+                    {formatYen(paidTotal)}
+                  </span>
+                </div>
                 <div className="mt-3 h-2 rounded-full bg-slate-100">
                   <div
                     className="h-2 rounded-full bg-slate-900/80"
                     style={{
                       width: `${totalCost
-                        ? Math.min(100, Math.round((savedTotal / totalCost) * 100))
+                        ? Math.min(100, Math.round((coveredTotal / totalCost) * 100))
                         : 0
                         }%`
                     }}
