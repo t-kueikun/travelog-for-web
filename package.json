@@ -2,16 +2,18 @@
   "name": "trave-log-web",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node -e \"require('fs').rmSync('.next',{ recursive: true, force: true })\" && next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
   },
   "dependencies": {
+    "@scrapeless-ai/sdk": "^1.11.0",
     "@vercel/analytics": "^1.6.1",
     "date-fns": "^4.1.0",
     "firebase": "^10.14.1",
-    "next": "14.2.5",
+    "maplibre-gl": "^5.20.1",
+    "next": "^14.2.35",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },

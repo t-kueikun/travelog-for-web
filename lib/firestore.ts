@@ -38,6 +38,7 @@ export type TravelPlan = {
   hotels?: Array<Record<string, unknown>>;
   packingList?: Array<Record<string, unknown> | string>;
   sharedWith?: Array<string>;
+  archived?: boolean;
 };
 
 export type Comment = {
@@ -62,6 +63,7 @@ export type PlanUpdate = Partial<
     | "hotels"
     | "packingList"
     | "savingsHistory"
+    | "archived"
   >
 >;
 
@@ -91,7 +93,8 @@ function mapPlan(snapshot: {
     transportations: Array.isArray(data.transportations) ? data.transportations : undefined,
     hotels: Array.isArray(data.hotels) ? data.hotels : undefined,
     packingList: Array.isArray(data.packingList) ? data.packingList : undefined,
-    sharedWith: Array.isArray(data.sharedWith) ? data.sharedWith : undefined
+    sharedWith: Array.isArray(data.sharedWith) ? data.sharedWith : undefined,
+    archived: data.archived === true
   };
 }
 
@@ -134,7 +137,7 @@ export async function getPublicPlans(): Promise<TravelPlan[]> {
   const ref = collectionGroup(db, "travelPlans");
   const q = query(ref, where("isPublic", "==", true));
   const snapshot = await getDocs(q);
-  return snapshot.docs.map(mapPlan);
+  return snapshot.docs.map(mapPlan).filter((plan) => !plan.archived);
 }
 
 export async function getPlanByPath(planPath: string): Promise<TravelPlan | null> {
@@ -211,6 +214,7 @@ export async function createPlan(userId: string) {
     name: "新しいLog",
     destination: "",
     memo: "",
+    archived: false,
     isPublic: false,
     ownerId: userId,
     userId,
@@ -236,6 +240,15 @@ export async function updatePlan(planPath: string, updates: PlanUpdate) {
   const db = getFirebaseDb();
   const ref = doc(db, planPath);
   await updateDoc(ref, updates);
+}
+
+export async function archivePlan(planPath: string, archived: boolean) {
+  const db = getFirebaseDb();
+  const ref = doc(db, planPath);
+  await updateDoc(ref, {
+    archived,
+    updatedAt: serverTimestamp()
+  });
 }
 
 export async function resetMyPlans(userId: string) {

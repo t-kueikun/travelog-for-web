@@ -10,23 +10,23 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type { User } from "firebase/auth";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import AuthGate from "@/components/AuthGate";
 import PageShell from "@/components/PageShell";
 import {
-  addDays,
   addMonths,
+  differenceInCalendarDays,
   endOfMonth,
   format,
   getDay,
   isAfter,
-  isBefore,
   isSameDay,
   startOfDay,
   startOfMonth
 } from "date-fns";
 import CommentForm from "@/components/CommentForm";
 import CommentList from "@/components/CommentList";
+import { type AiPlanSuggestion } from "@/lib/ai-plan";
 import {
   deleteComment,
   getPlanById,
@@ -86,6 +86,7 @@ type TransferDraft = {
   raw: ItemRecord;
   id: string;
   station: FieldDraft;
+  serviceName: FieldDraft;
   depTime: FieldDraft;
   arrTime: FieldDraft;
 };
@@ -141,6 +142,96 @@ type SavingsDraft = {
   original: string;
   isObject: boolean;
 };
+
+type AiPlannerMode = "replace" | "merge";
+type AiAssistantMode = "consult" | "plan";
+
+type AiChatSource = {
+  title: string;
+  url: string;
+  snippet?: string;
+};
+
+type AiAssistantResponse = {
+  mode?: AiAssistantMode;
+  summary?: string;
+  warnings?: string[];
+  plan?: AiPlanSuggestion;
+  answer?: string;
+  requiresClarification?: boolean;
+  questions?: string[];
+  sources?: AiChatSource[];
+  detail?: string;
+  status?: number;
+  error?: string;
+};
+
+type HotelRecommendation = {
+  name: string;
+  price: number | null;
+  currency: string | null;
+  score: number | null;
+  reviewCount: number | null;
+  address: string | null;
+  link: string | null;
+  source: string;
+};
+
+type HotelRecommendationsResponse = {
+  destinationResolved?: {
+    destId?: string;
+    name?: string;
+    type?: string;
+  };
+  hotels?: HotelRecommendation[];
+  warnings?: string[];
+  detail?: string;
+  error?: string;
+};
+
+type AiChatRole = "user" | "assistant";
+
+type AiChatMessage = {
+  id: string;
+  role: AiChatRole;
+  text: string;
+  warnings: string[];
+  attachments: string[];
+  sources: AiChatSource[];
+  createdAt: string;
+};
+
+type TripMapStop = {
+  id: string;
+  label: string;
+  query: string;
+  queryCandidates: string[];
+  kind: "宿泊" | "予定" | "移動";
+  sortValue: string;
+  subtitle: string;
+};
+
+type TripMapResolvedStop = TripMapStop & {
+  placeName: string;
+  lng: number;
+  lat: number;
+};
+
+type TripOverviewResponse = {
+  error?: string;
+  detail?: string;
+  points?: TripMapResolvedStop[];
+  warnings?: string[];
+  provider?: string;
+};
+
+type PendingAiSuggestion = {
+  suggestion: AiPlanSuggestion;
+  summary: string;
+  warnings: string[];
+};
+
+const AI_CHAT_HISTORY_LIMIT = 80;
 
 const TRANSPORT_NAME_KEYS = ["name", "title", "type"];
 const TRANSPORT_MODE_KEYS = ["type", "category", "kind", "mode"];
@@ -264,6 +355,7 @@ const TRANSPORT_FROM_KEYS = [
   "fromCity",
   "originCity",
   "fromAirport",
+  "departureAirport",
   "fromStation"
 ];
 const TRANSPORT_FROM_PATTERNS = ["departure", "depart", "origin", "start", "from"];
@@ -283,6 +375,7 @@ const TRANSPORT_TO_KEYS = [
   "toCity",
   "destinationCity",
   "toAirport",
+  "arrivalAirport",
   "toStation"
 ];
 const TRANSPORT_TO_PATTERNS = ["arrival", "arrive", "destination", "dest", "end"];
@@ -322,6 +415,13 @@ const TRANSPORT_ARR_KEYS = [
   "arriveDate"
 ];
 const TRANSFER_STATION_KEYS = ["station", "name", "title"];
+const TRANSFER_SERVICE_KEYS = [
+  "serviceName",
+  "service",
+  "flightNumber",
+  "flightNo",
+  "lineName"
+];
 const TRANSFER_DEP_KEYS = ["departureTime", "depTime", "departAt"];
 const TRANSFER_ARR_KEYS = ["arrivalTime", "arrTime", "arriveAt"];
 
@@ -464,7 +564,7 @@ function getNumberField(item: ItemRecord, keys: string[]) {
       return value;
     }
     if (typeof value === "string") {
-      const parsed = Number(value);
+      const parsed = Number(value.replace(/[^\d.-]/g, ""));
       if (!Number.isNaN(parsed)) {
         return parsed;
       }
@@ -1246,15 +1346,148 @@ function buildStringDraft(
   return { key, value, original: value };
 }
 
+function hasAirportSignal(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.includes("airport") || value.includes("空港")) {
+    return true;
+  }
+  return /\(([a-z]{3})\)/i.test(value);
+}
+
+function inferTransportModeFromItem(item: ItemRecord) {
+  const from = getLocationField(item, TRANSPORT_FROM_KEYS);
+  const to = getLocationField(item, TRANSPORT_TO_KEYS);
+  const name = getStringField(item, ["name", "title"]);
+  const service = getStringField(item, [
+    "flightNumber",
+    "flightNo",
+    "serviceName",
+    "name",
+    "title"
+  ]);
+  const notes = getStringField(item, NOTES_KEYS);
+  const explicitFlightNumber = getStringField(item, ["flightNumber", "flightNo"]);
+  const signalText = `${name} ${service} ${notes}`.trim();
+
+  const flightNumberLike = /\b[a-z]{2,3}\s?\d{2,4}\b/i.test(signalText);
+  const flightWordLike = /航空|flight|airline|便|plane/i.test(signalText);
+  const railWordLike =
+    /新幹線|特急|在来線|電車|鉄道|train|rail|metro|subway|jr/i.test(signalText);
+  const busWordLike = /バス|bus|coach/i.test(signalText);
+  const shipWordLike = /船|フェリー|ship|ferry|boat/i.test(signalText);
+  const carWordLike =
+    /車|タクシー|レンタカー|car|taxi|drive|uber|lyft|rideshare|ridehail/i.test(signalText);
+  const hasFromAirport = hasAirportSignal(from);
+  const hasToAirport = hasAirportSignal(to);
+
+  if (explicitFlightNumber || flightNumberLike || flightWordLike) {
+    return "飛行機";
+  }
+  if (hasFromAirport && hasToAirport) {
+    return "飛行機";
+  }
+  if (carWordLike) {
+    return "車";
+  }
+  if (busWordLike) {
+    return "バス";
+  }
+  if (shipWordLike) {
+    return "船";
+  }
+  if (railWordLike) {
+    return signalText.includes("新幹線")
+      ? "新幹線"
+      : signalText.includes("特急")
+        ? "特急"
+        : "在来線";
+  }
+  return "";
+}
+
+function normalizeTransportModeValue(rawValue: string, item: ItemRecord) {
+  const inferred = inferTransportModeFromItem(item);
+  if (inferred) {
+    return inferred;
+  }
+
+  const value = rawValue.trim();
+  if (!value) {
+    return "在来線";
+  }
+  if (TRANSPORT_MODES.includes(value)) {
+    return value;
+  }
+
+  const normalized = value.toLowerCase().replace(/\s+/g, "");
+  if (normalized.includes("shinkansen") || value.includes("新幹線")) {
+    return "新幹線";
+  }
+  if (
+    normalized.includes("limitedexpress") ||
+    normalized.includes("ltdexp") ||
+    value.includes("特急")
+  ) {
+    return "特急";
+  }
+  if (
+    normalized.includes("train") ||
+    normalized.includes("rail") ||
+    normalized.includes("jr") ||
+    normalized.includes("metro") ||
+    normalized.includes("subway") ||
+    value.includes("在来線") ||
+    value.includes("電車") ||
+    value.includes("鉄道")
+  ) {
+    return "在来線";
+  }
+  if (
+    normalized.includes("flight") ||
+    normalized.includes("plane") ||
+    normalized.includes("air") ||
+    value.includes("飛行機")
+  ) {
+    return "飛行機";
+  }
+  if (normalized.includes("bus") || value.includes("バス")) {
+    return "バス";
+  }
+  if (
+    normalized.includes("ferry") ||
+    normalized.includes("ship") ||
+    normalized.includes("boat") ||
+    value.includes("船")
+  ) {
+    return "船";
+  }
+  if (
+    normalized.includes("car") ||
+    normalized.includes("taxi") ||
+    normalized.includes("drive") ||
+    value.includes("車")
+  ) {
+    return "車";
+  }
+  return "在来線";
+}
+
 function buildModeDraft(item: ItemRecord) {
   const key = resolveKey(item, TRANSPORT_MODE_KEYS);
   const rawValue = key ? getStringField(item, [key]) : "";
-  const value = TRANSPORT_MODES.includes(rawValue) ? rawValue : "新幹線";
+  const value = normalizeTransportModeValue(rawValue, item);
   return { key: key || TRANSPORT_MODE_KEYS[0], value, original: value };
 }
 
 function getModeConfig(mode: string) {
-  return TRANSPORT_MODE_CONFIG[mode] ?? TRANSPORT_MODE_CONFIG["新幹線"];
+  return TRANSPORT_MODE_CONFIG[mode] ?? TRANSPORT_MODE_CONFIG["在来線"];
+}
+
+function supportsTransferInput(mode: string) {
+  return mode === "在来線" || mode === "飛行機";
 }
 
 function buildLocationDraft(
@@ -1286,6 +1519,7 @@ function buildTransferDrafts(items: ItemRecord[]) {
       raw: item,
       id,
       station: buildStringDraft(item, TRANSFER_STATION_KEYS),
+      serviceName: buildStringDraft(item, TRANSFER_SERVICE_KEYS),
       depTime: buildDateDraft(item, TRANSFER_DEP_KEYS),
       arrTime: buildDateDraft(item, TRANSFER_ARR_KEYS)
     } satisfies TransferDraft;
@@ -1496,6 +1730,7 @@ function applyTransferDrafts(drafts: TransferDraft[]) {
   return drafts.map((draft) => {
     const nextItem: ItemRecord = { ...draft.raw, id: draft.id };
     applyStringDraft(nextItem, draft.station);
+    applyStringDraft(nextItem, draft.serviceName);
     applyStringDraft(nextItem, draft.depTime);
     applyStringDraft(nextItem, draft.arrTime);
     return nextItem;
@@ -1522,7 +1757,7 @@ function applyTransportationDrafts(drafts: TransportationDraft[]) {
     applyStringDraft(nextItem, draft.currency);
     applyBooleanDraft(nextItem, draft.paid);
     applyStringDraft(nextItem, draft.notes);
-    if (draft.mode.value === "在来線" || Array.isArray(draft.raw.transfers)) {
+    if (supportsTransferInput(draft.mode.value) || Array.isArray(draft.raw.transfers)) {
       nextItem.transfers = applyTransferDrafts(draft.transfers);
     }
     return nextItem;
@@ -1643,19 +1878,12 @@ function buildMonthCells(month: Date) {
   return cells;
 }
 
-function isInRange(day: Date, start: Date | null, end: Date | null) {
-  if (!start || !end) {
-    return false;
-  }
-  return !isBefore(day, start) && !isAfter(day, end);
-}
-
 function StayDateRangePicker({
   title = "宿泊日程",
   startDate,
   endDate,
-  originalStartDate,
-  originalEndDate,
+  originalStartDate: _originalStartDate,
+  originalEndDate: _originalEndDate,
   onChange
 }: {
   title?: string;
@@ -1674,26 +1902,30 @@ function StayDateRangePicker({
     left: number;
     width: number;
   } | null>(null);
-
   const start = parseDateInputValue(startDate);
-  const end = parseDateInputValue(endDate);
-  const safeEnd = end || start;
-  const [leftMonth, setLeftMonth] = useState<Date>(
+  const end = parseDateInputValue(endDate) || start;
+  const [month, setMonth] = useState<Date>(
     startOfMonth(start || new Date())
   );
-  const rightMonth = addMonths(leftMonth, 1);
-  const visualStart = anchorDate ?? start;
-  const visualEnd = anchorDate ? anchorDate : safeEnd;
-  const startLabel = start ? format(start, "M/d") : "未選択";
-  const endLabel = safeEnd ? format(safeEnd, "M/d") : "未選択";
+  let rangeStartDate = start;
+  let rangeEndDate = end;
+  if (rangeStartDate && rangeEndDate && isAfter(rangeStartDate, rangeEndDate)) {
+    const swap = rangeStartDate;
+    rangeStartDate = rangeEndDate;
+    rangeEndDate = swap;
+  }
+  const stayNights =
+    rangeStartDate && rangeEndDate
+      ? Math.max(0, differenceInCalendarDays(rangeEndDate, rangeStartDate))
+      : null;
   const rangeLabel =
-    start || safeEnd
-      ? `${startLabel} - ${endLabel}`
+    rangeStartDate && rangeEndDate
+      ? `${format(rangeStartDate, "M/d")} - ${format(rangeEndDate, "M/d")}`
       : "日程を選択";
 
   useEffect(() => {
     const nextStart = parseDateInputValue(startDate);
-    setLeftMonth(startOfMonth(nextStart || new Date()));
+    setMonth(startOfMonth(nextStart || new Date()));
     setAnchorDate(null);
   }, [startDate]);
 
@@ -1704,7 +1936,7 @@ function StayDateRangePicker({
     }
     const rect = anchor.getBoundingClientRect();
     const viewportPadding = 12;
-    const width = Math.min(760, window.innerWidth - viewportPadding * 2);
+    const width = Math.min(360, window.innerWidth - viewportPadding * 2);
     const centeredLeft = rect.left + rect.width / 2 - width / 2;
     const left = Math.max(
       viewportPadding,
@@ -1753,67 +1985,11 @@ function StayDateRangePicker({
       setAnchorDate(selected);
       return;
     }
-
-    const nextStart = isBefore(selected, anchorDate) ? selected : anchorDate;
-    const nextEnd = isAfter(selected, anchorDate) ? selected : anchorDate;
+    const nextStart = isAfter(anchorDate, selected) ? selected : anchorDate;
+    const nextEnd = isAfter(anchorDate, selected) ? anchorDate : selected;
     onChange(toDateInput(nextStart), toDateInput(nextEnd));
     setAnchorDate(null);
-  };
-
-  const applyNights = (nights: number) => {
-    if (!start) {
-      return;
-    }
-    onChange(toDateInput(start), toDateInput(addDays(start, nights)));
-  };
-
-  const restoreOriginalRange = () => {
-    if (!originalStartDate || !originalEndDate) {
-      return;
-    }
-    onChange(originalStartDate, originalEndDate);
-  };
-
-  const renderMonth = (month: Date) => {
-    const cells = buildMonthCells(month);
-    return (
-      <div className="w-full">
-        <p className="text-center text-base font-bold text-slate-900">
-          {format(month, "yyyy年M月")}
-        </p>
-        <div className="mt-3 grid grid-cols-7 gap-y-2 text-center text-xs text-slate-500">
-          {["日", "月", "火", "水", "木", "金", "土"].map((label) => (
-            <span key={`${format(month, "yyyy-MM")}-${label}`}>{label}</span>
-          ))}
-        </div>
-        <div className="mt-2 grid grid-cols-7 gap-y-2">
-          {cells.map((cell, index) => {
-            if (!cell) {
-              return <span key={`blank-${format(month, "yyyy-MM")}-${index}`} />;
-            }
-            const selectedStart = visualStart ? isSameDay(cell, visualStart) : false;
-            const selectedEnd = visualEnd ? isSameDay(cell, visualEnd) : false;
-            const inRange = anchorDate ? false : isInRange(cell, start, safeEnd);
-            const highlighted = selectedStart || selectedEnd;
-            return (
-              <button
-                key={toDateInput(cell)}
-                type="button"
-                onClick={() => handleDayClick(cell)}
-                className={`mx-auto h-9 w-9 rounded-lg text-sm font-semibold transition md:h-10 md:w-10 md:text-base ${highlighted
-                  ? "bg-blue-600 text-white"
-                  : inRange
-                    ? "bg-blue-50 text-blue-700"
-                    : "text-slate-900 hover:bg-slate-100"
-                  }`}
-              >
-                {format(cell, "d")}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
+    setIsOpen(false);
   };
 
   const popup =
@@ -1821,7 +1997,7 @@ function StayDateRangePicker({
       ? createPortal(
         <div
           ref={popupRef}
-          className="fixed z-[1200] rounded-2xl border border-white/65 bg-white/72 p-3 shadow-[0_26px_72px_-28px_rgba(15,23,42,0.65)] backdrop-blur-2xl"
+          className="fixed z-[1200] rounded-2xl border border-white/65 bg-white/72 p-3.5 shadow-[0_26px_72px_-28px_rgba(15,23,42,0.65)] backdrop-blur-2xl"
           style={{
             top: popupStyle.top,
             left: popupStyle.left,
@@ -1833,48 +2009,84 @@ function StayDateRangePicker({
               ? "終了日を選択してください（外側タップで閉じる）"
               : "開始日→終了日を順に選択（外側タップで閉じる）"}
           </p>
-          <div className="mt-2 flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setLeftMonth((current) => addMonths(current, -1))}
-              className="rounded-lg border border-white/80 bg-white/60 px-3 py-1 text-xs font-semibold text-slate-600 backdrop-blur hover:bg-white/80"
-              aria-label="前の月"
-            >
-              前月
-            </button>
-            <button
-              type="button"
-              onClick={() => setLeftMonth((current) => addMonths(current, 1))}
-              className="rounded-lg border border-white/80 bg-white/60 px-3 py-1 text-xs font-semibold text-slate-600 backdrop-blur hover:bg-white/80"
-              aria-label="次の月"
-            >
-              次月
-            </button>
-          </div>
-          <div className="mt-2 grid gap-4 md:grid-cols-2">
-            <div>{renderMonth(leftMonth)}</div>
-            <div className="hidden md:block">{renderMonth(rightMonth)}</div>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-200 pt-3">
-            {originalStartDate && originalEndDate ? (
+          {rangeStartDate && rangeEndDate ? (
+            <p className="mt-1 text-xs font-semibold text-slate-700">
+              {format(rangeStartDate, "M/d")} - {format(rangeEndDate, "M/d")}
+              {stayNights !== null ? ` (${stayNights}泊)` : ""}
+            </p>
+          ) : null}
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <p className="whitespace-nowrap text-xl font-bold text-slate-900">
+              {format(month, "yyyy年M月")}
+            </p>
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={restoreOriginalRange}
-                className="rounded-full border border-blue-400/70 bg-white/55 px-4 py-1.5 text-sm font-semibold text-blue-700 backdrop-blur"
+                onClick={() => setMonth((current) => addMonths(current, -1))}
+                className="rounded-lg border border-white/80 bg-white/60 px-3 py-1 text-xs font-semibold text-slate-600 backdrop-blur hover:bg-white/80"
+                aria-label="前の月"
               >
-                元の日程
+                前月
               </button>
-            ) : null}
-            {[1, 2, 3, 7].map((nights) => (
               <button
-                key={`stay-${nights}`}
                 type="button"
-                onClick={() => applyNights(nights)}
-                className="rounded-full border border-white/80 bg-white/55 px-4 py-1.5 text-sm font-semibold text-slate-700 backdrop-blur"
+                onClick={() => setMonth((current) => addMonths(current, 1))}
+                className="rounded-lg border border-white/80 bg-white/60 px-3 py-1 text-xs font-semibold text-slate-600 backdrop-blur hover:bg-white/80"
+                aria-label="次の月"
               >
-                +{nights}日
+                次月
               </button>
+            </div>
+          </div>
+          <div className="mt-3 grid grid-cols-7 gap-x-1 gap-y-2 text-center text-xs font-semibold text-slate-500">
+            {["日", "月", "火", "水", "木", "金", "土"].map((label) => (
+              <span key={`${format(month, "yyyy-MM")}-${label}`}>{label}</span>
             ))}
+          </div>
+          <div className="mt-2 grid grid-cols-7 gap-x-0 gap-y-2">
+            {buildMonthCells(month).map((cell, index) => {
+              if (!cell) {
+                return (
+                  <span
+                    key={`blank-${format(month, "yyyy-MM")}-${index}`}
+                    className="h-10"
+                  />
+                );
+              }
+              const isRangeStart = rangeStartDate
+                ? isSameDay(cell, rangeStartDate)
+                : anchorDate
+                  ? isSameDay(cell, anchorDate)
+                  : false;
+              const isRangeEnd = rangeEndDate && !anchorDate ? isSameDay(cell, rangeEndDate) : false;
+              const inRange =
+                Boolean(rangeStartDate && rangeEndDate && !anchorDate) &&
+                cell.getTime() > (rangeStartDate?.getTime() ?? 0) &&
+                cell.getTime() < (rangeEndDate?.getTime() ?? 0);
+              const isBlueEdge = isRangeStart || isRangeEnd;
+              const wrapperClass = isRangeStart && isRangeEnd
+                ? "rounded-lg bg-blue-600"
+                : isRangeStart
+                  ? "rounded-l-lg bg-blue-600"
+                  : isRangeEnd
+                    ? "rounded-r-lg bg-blue-600"
+                    : inRange
+                      ? "bg-slate-200"
+                      : "rounded-lg hover:bg-slate-100";
+              return (
+                <div key={toDateInput(cell)} className={`h-10 ${wrapperClass}`}>
+                  <button
+                    type="button"
+                    onClick={() => handleDayClick(cell)}
+                    className={`h-10 w-full text-base font-semibold transition ${
+                      isBlueEdge ? "text-white" : "text-slate-900"
+                    }`}
+                  >
+                    {format(cell, "d")}
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>,
         document.body
@@ -1884,25 +2096,32 @@ function StayDateRangePicker({
   return (
     <div
       ref={wrapperRef}
-      className="relative rounded-2xl border border-white/60 bg-white/45 p-3 shadow-[0_16px_38px_-24px_rgba(15,23,42,0.55)] backdrop-blur-xl"
+      className="relative mt-1.5"
     >
       <button
         type="button"
-        onClick={() =>
-          setIsOpen((current) => {
-            const next = !current;
-            if (!next) {
-              setAnchorDate(null);
-            }
-            return next;
-          })
-        }
-        className="flex w-full items-center justify-between gap-4 rounded-xl border border-white/70 bg-white/65 px-4 py-2.5 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-md"
+        onClick={() => {
+          const next = !isOpen;
+          setIsOpen(next);
+          if (!next) {
+            setAnchorDate(null);
+          }
+          if (next) {
+            requestAnimationFrame(() => updatePopupPosition());
+          }
+        }}
+        className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] transition focus:border-sky-300"
         aria-expanded={isOpen}
       >
-        <div>
-          <p className="text-[10px] font-semibold text-slate-500">{title}</p>
-          <p className="mt-1 text-base font-semibold leading-tight text-slate-900">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold tracking-[0.18em] text-slate-500">
+            {title}
+          </p>
+          <p
+            className={`mt-1 text-sm font-medium ${
+              rangeStartDate ? "text-slate-900" : "text-slate-400"
+            }`}
+          >
             {rangeLabel}
           </p>
         </div>
@@ -2152,6 +2371,141 @@ function parseDateInput(value: string) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function getAiPlannerErrorMessage(code?: string, detail?: string) {
+  const normalizedDetail = detail?.trim();
+  if (normalizedDetail) {
+    return normalizedDetail;
+  }
+  switch (code) {
+    case "missing_openai_api_key":
+      return "OPENAI_API_KEY が設定されていません。";
+    case "prompt_or_image_required":
+      return "文章か画像のどちらかを入力してください。";
+    case "too_many_images":
+      return "画像は3枚まで選択できます。";
+    case "invalid_image_type":
+      return "画像ファイルのみアップロードできます。";
+    case "image_too_large":
+      return "画像サイズは1枚あたり6MB以下にしてください。";
+    case "ai_output_incomplete":
+      return "AIの出力が途中で切れました。入力テキストを短くするか画像枚数を減らして再試行してください。";
+    case "invalid_ai_response":
+      return "AIの出力を解析できませんでした。入力を少し具体的にして再試行してください。";
+    default:
+      return "AIプランの作成に失敗しました。時間をおいて再試行してください。";
+  }
+}
+
+function getHotelRecommendationsErrorMessage(code?: string, detail?: string) {
+  const normalizedDetail = detail?.trim();
+  if (normalizedDetail) {
+    return normalizedDetail;
+  }
+  switch (code) {
+    case "missing_hotel_api_key":
+      return "SERPAPI_API_KEY が設定されていません。";
+    case "destination_required":
+      return "目的地を入力してください。";
+    case "invalid_dates":
+      return "旅行日程を設定してから再試行してください。";
+    case "destination_not_found":
+      return "目的地候補が見つかりませんでした。都市名を具体的に入力してください。";
+    case "location_lookup_failed":
+      return "目的地の検索に失敗しました。";
+    case "hotel_search_failed":
+      return "ホテル候補の検索に失敗しました。";
+    default:
+      return "ホテル候補の取得に失敗しました。時間をおいて再試行してください。";
+  }
+}
+
+function normalizeAiChatMessage(value: unknown) {
+  const toText = (entry: unknown) => (typeof entry === "string" ? entry.trim() : "");
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const role = record.role === "user" ? "user" : record.role === "assistant" ? "assistant" : null;
+  const text = toText(record.text);
+  const createdAt = toText(record.createdAt);
+  if (!role || !text) {
+    return null;
+  }
+  return {
+    id: toText(record.id) || createDraftId(),
+    role,
+    text,
+    warnings: Array.isArray(record.warnings)
+      ? record.warnings.map((item) => toText(item)).filter(Boolean)
+      : [],
+    attachments: Array.isArray(record.attachments)
+      ? record.attachments.map((item) => toText(item)).filter(Boolean)
+      : [],
+    sources: normalizeAiChatSources(record.sources),
+    createdAt: createdAt || new Date().toISOString()
+  } satisfies AiChatMessage;
+}
+
+function normalizeAiChatSources(value: unknown): AiChatSource[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const result: AiChatSource[] = [];
+  value.forEach((item) => {
+    if (!item || typeof item !== "object") {
+      return;
+    }
+    const record = item as Record<string, unknown>;
+    const title = typeof record.title === "string" ? record.title.trim() : "";
+    const url = typeof record.url === "string" ? record.url.trim() : "";
+    const snippet = typeof record.snippet === "string" ? record.snippet.trim() : "";
+    if (!url) {
+      return;
+    }
+    result.push({
+      title: title || url,
+      url,
+      snippet: snippet || undefined
+    });
+  });
+  return result.slice(0, 8);
+}
+
+function formatAiChatTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return format(date, "M/d HH:mm");
+}
+
+function hasHotelRecommendationIntent(value: string) {
+  const text = value.trim().toLowerCase();
+  if (!text) {
+    return false;
+  }
+  return [
+    "ホテル",
+    "宿",
+    "hotel",
+    "accommodation",
+    "おすすめ",
+    "オススメ",
+    "泊ま"
+  ].some((keyword) => text.includes(keyword));
+}
+
+function toDateOnly(value: string | null | undefined) {
+  if (!value) {
+    return "";
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return "";
+  }
+  return normalized.slice(0, 10);
+}
+
 function normalizeLink(raw: string) {
   const value = raw.trim();
   if (!value) {
@@ -2163,8 +2517,675 @@ function normalizeLink(raw: string) {
   return `https://${value}`;
 }
 
+function compactText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function extractMapHint(text: string) {
+  const parts = text
+    .split("/")
+    .map((part) => compactText(part))
+    .filter(Boolean);
+  return (
+    parts.find(
+      (part) =>
+        !/^レビュー\b/.test(part) &&
+        !/^source\s*:/i.test(part) &&
+        !/要確認|未確定|候補/.test(part)
+    ) || ""
+  );
+}
+
+function buildMapQuery(parts: Array<string | null | undefined>) {
+  const normalized = parts
+    .map((part) => compactText(part ?? ""))
+    .filter(Boolean);
+  if (normalized.length === 0) {
+    return "";
+  }
+  return Array.from(new Set(normalized)).join(", ");
+}
+
+function buildHotelMapQuery(name: string, notes: string, destination: string) {
+  return buildMapQuery([name, extractMapHint(notes), destination]);
+}
+
+function buildActivityMapQuery(title: string, notes: string, destination: string) {
+  return buildMapQuery([title, extractMapHint(notes), destination]);
+}
+
+function stripIataSuffix(value: string) {
+  return compactText(value).replace(/\s*\([A-Z]{3,4}\)\s*$/g, "");
+}
+
+function containsJapaneseText(value: string) {
+  return /[\u3040-\u30ff\u3400-\u9fff]/.test(value);
+}
+
+const AIRPORT_CODE_ALIASES: Record<string, string[]> = {
+  HND: ["東京国際空港", "羽田空港"],
+  NRT: ["成田国際空港", "成田空港"],
+  ITM: ["大阪国際空港", "伊丹空港", "大阪伊丹空港"],
+  KIX: ["関西国際空港", "関西空港"],
+  UKB: ["神戸空港"],
+  CTS: ["新千歳空港"],
+  FUK: ["福岡空港"],
+  OKA: ["那覇空港"]
+};
+
+const DESTINATION_GEO_ALIASES: Record<string, string[]> = {
+  バンコク: ["バンコク", "Bangkok", "タイ", "Thailand"],
+  Bangkok: ["バンコク", "Bangkok", "タイ", "Thailand"],
+  台北: ["台北", "Taipei", "台湾", "Taiwan"],
+  Taipei: ["台北", "Taipei", "台湾", "Taiwan"],
+  ソウル: ["ソウル", "Seoul", "韓国", "Korea"],
+  Seoul: ["ソウル", "Seoul", "韓国", "Korea"],
+  香港: ["香港", "Hong Kong"],
+  Singapore: ["シンガポール", "Singapore"],
+  シンガポール: ["シンガポール", "Singapore"],
+  Doha: ["ドーハ", "Doha", "カタール", "Qatar"],
+  ドーハ: ["ドーハ", "Doha", "カタール", "Qatar"]
+};
+
+function getIataCode(value: string) {
+  const match = compactText(value).match(/\(([A-Z]{3,4})\)\s*$/);
+  return match?.[1] ?? "";
+}
+
+function getAirportAliasCandidates(label: string) {
+  const code = getIataCode(label);
+  const base = stripIataSuffix(label);
+  const aliases = [
+    ...(code ? AIRPORT_CODE_ALIASES[code] ?? [] : []),
+    /羽田/.test(base) ? "東京国際空港" : "",
+    /伊丹|大阪国際/.test(base) ? "大阪国際空港" : "",
+    /関西空港/.test(base) ? "関西国際空港" : "",
+    /成田/.test(base) ? "成田国際空港" : ""
+  ]
+    .map((candidate) => compactText(candidate))
+    .filter(Boolean);
+  return Array.from(new Set(aliases));
+}
+
+function splitDestinationHints(value: string) {
+  const rawHints = Array.from(
+    new Set(
+      compactText(value)
+        .split(/[、,・/／>\-|→\n]+/)
+        .map((part) => stripIataSuffix(part))
+        .map((part) => compactText(part))
+        .filter((part) => part.length > 1)
+    )
+  ).slice(0, 3);
+  const expanded = rawHints.flatMap((hint) => DESTINATION_GEO_ALIASES[hint] ?? [hint]);
+  return Array.from(new Set(expanded.map((hint) => compactText(hint)).filter(Boolean))).slice(0, 6);
+}
+
+function isJapanDestination(destinationHints: string[]) {
+  return destinationHints.some((hint) =>
+    /日本|東京|大阪|京都|北海道|福岡|博多|那覇|札幌|名古屋|横浜|神戸/i.test(hint)
+  );
+}
+
+function extractPlaceFragments(value: string) {
+  const normalized = compactText(stripIataSuffix(value))
+    .replace(/[()（）]/g, " ")
+    .replace(
+      /(観光|散策|体験|食べ歩き|味くらべ|グルメ|ランチ|ディナー|朝食|巡り|要確認|おすすめ|人気|本店)/g,
+      " "
+    );
+  return Array.from(
+    new Set(
+      normalized
+        .split(/[&＆、,\/／]+/)
+        .flatMap((part) => part.split(/・/))
+        .map((part) => compactText(part))
+        .filter((part) => part.length >= 2)
+        .filter(
+          (part) =>
+            !/^(和菓子|グルメ|観光|散策|体験|食べ歩き|ランチ|ディナー|朝食)$/.test(part)
+        )
+    )
+  ).slice(0, 4);
+}
+
+function buildLocationQueryCandidates(label: string, destinationHint = "") {
+  const base = stripIataSuffix(label);
+  const destinationHints = splitDestinationHints(destinationHint);
+  const airportAliases = getAirportAliasCandidates(label);
+  const appendJapanSuffix = isJapanDestination(destinationHints);
+  return buildQueryCandidates([
+    ...(appendJapanSuffix ? airportAliases.map((alias) => [alias, "日本"]) : []),
+    ...airportAliases.map((alias) => [alias]),
+    containsJapaneseText(base) && appendJapanSuffix ? [base, "日本"] : [],
+    ...destinationHints.map((hint) =>
+      containsJapaneseText(base) && appendJapanSuffix ? [base, hint, "日本"] : [base, hint]
+    ),
+    [base],
+    [label]
+  ]);
+}
+
+function buildQueryCandidates(partsList: Array<Array<string | null | undefined>>) {
+  const candidates = partsList
+    .map((parts) => buildMapQuery(parts))
+    .filter(Boolean);
+  return Array.from(new Set(candidates));
+}
+
+function buildHotelMapQueryCandidates(name: string, notes: string, destination: string) {
+  const hint = extractMapHint(notes);
+  const baseName = stripIataSuffix(name);
+  const destinationHints = splitDestinationHints(destination);
+  const placeFragments = extractPlaceFragments(`${name} ${hint}`);
+  const appendJapanSuffix = isJapanDestination(destinationHints);
+  return buildQueryCandidates([
+    ...destinationHints.map((destinationHint) =>
+      containsJapaneseText(baseName) && appendJapanSuffix
+        ? [baseName, destinationHint, "日本"]
+        : [baseName, destinationHint]
+    ),
+    ...placeFragments.flatMap((fragment) =>
+      destinationHints.map((destinationHint) =>
+        appendJapanSuffix ? [fragment, destinationHint, "日本"] : [fragment, destinationHint]
+      )
+    ),
+    containsJapaneseText(baseName) && appendJapanSuffix ? [baseName, "日本"] : [],
+    ...(appendJapanSuffix ? placeFragments.map((fragment) => [fragment, "日本"]) : []),
+    [baseName],
+    [hint],
+    ...destinationHints.map((destinationHint) => [hint, destinationHint]),
+    ...placeFragments.map((fragment) => [fragment]),
+    [name]
+  ]);
+}
+
+function buildActivityMapQueryCandidates(title: string, notes: string, destination: string) {
+  const hint = extractMapHint(notes);
+  const baseTitle = stripIataSuffix(title);
+  const destinationHints = splitDestinationHints(destination);
+  const placeFragments = extractPlaceFragments(`${title} ${hint}`);
+  const appendJapanSuffix = isJapanDestination(destinationHints);
+  return buildQueryCandidates([
+    ...destinationHints.map((destinationHint) =>
+      containsJapaneseText(baseTitle) && appendJapanSuffix
+        ? [baseTitle, destinationHint, "日本"]
+        : [baseTitle, destinationHint]
+    ),
+    ...placeFragments.flatMap((fragment) =>
+      destinationHints.map((destinationHint) =>
+        appendJapanSuffix ? [fragment, destinationHint, "日本"] : [fragment, destinationHint]
+      )
+    ),
+    containsJapaneseText(baseTitle) && appendJapanSuffix ? [baseTitle, "日本"] : [],
+    ...(appendJapanSuffix ? placeFragments.map((fragment) => [fragment, "日本"]) : []),
+    [baseTitle],
+    [hint],
+    ...destinationHints.map((destinationHint) => [hint, destinationHint]),
+    ...placeFragments.map((fragment) => [fragment]),
+    [title]
+  ]);
+}
+
+function normalizeTripMapSortValue(value: string) {
+  const normalized = compactText(value);
+  if (!normalized) {
+    return "9999-12-31T23:59:59";
+  }
+  const timestamp = Date.parse(normalized);
+  if (Number.isFinite(timestamp)) {
+    return new Date(timestamp).toISOString();
+  }
+  return normalized;
+}
+
+function dedupeTripMapStops(stops: TripMapStop[]) {
+  const seen = new Set<string>();
+  return stops.filter((stop) => {
+    const key = `${stop.kind}:${compactText(stop.label).toLowerCase()}`;
+    if (!key || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 function getLinkField(item: ItemRecord) {
   return getStringField(item, LINK_KEYS);
+}
+
+function formatTripMapDistance(km: number) {
+  if (km < 1) {
+    return `${Math.round(km * 1000)}m`;
+  }
+  if (km < 10) {
+    return `${km.toFixed(1)}km`;
+  }
+  return `${Math.round(km)}km`;
+}
+
+function getDistanceInKm(
+  from: Pick<TripMapResolvedStop, "lat" | "lng">,
+  to: Pick<TripMapResolvedStop, "lat" | "lng">
+) {
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const deltaLat = toRadians(to.lat - from.lat);
+  const deltaLng = toRadians(to.lng - from.lng);
+  const fromLat = toRadians(from.lat);
+  const toLat = toRadians(to.lat);
+  const a =
+    Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+    Math.cos(fromLat) *
+      Math.cos(toLat) *
+      Math.sin(deltaLng / 2) *
+      Math.sin(deltaLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadiusKm * c;
+}
+
+function buildTripMapStopsFromHotels(
+  hotels: Array<{
+    id: string;
+    name: string;
+    notes: string;
+    checkIn: string;
+    checkOut: string;
+  }>,
+  destination: string
+) {
+  return hotels
+    .map((hotel) => {
+      const label = compactText(hotel.name);
+      const queryCandidates = buildHotelMapQueryCandidates(
+        label,
+        hotel.notes,
+        destination
+      );
+      const query = queryCandidates[0] ?? "";
+      const subtitle =
+        hotel.checkIn || hotel.checkOut
+          ? `${hotel.checkIn || "—"} 〜 ${hotel.checkOut || "—"}`
+          : "宿泊";
+      if (!label || !query) {
+        return null;
+      }
+      return {
+        id: hotel.id,
+        label,
+        query,
+        queryCandidates,
+        kind: "宿泊" as const,
+        sortValue: normalizeTripMapSortValue(hotel.checkIn || hotel.checkOut),
+        subtitle
+      } satisfies TripMapStop;
+    })
+    .filter(Boolean) as TripMapStop[];
+}
+
+function buildTripMapStopsFromActivities(
+  activities: Array<{
+    id: string;
+    title: string;
+    notes: string;
+    date: string;
+  }>,
+  destination: string
+) {
+  return activities
+    .map((activity) => {
+      const label = compactText(activity.title);
+      const queryCandidates = buildActivityMapQueryCandidates(
+        label,
+        activity.notes,
+        destination
+      );
+      const query = queryCandidates[0] ?? "";
+      if (!label || !query) {
+        return null;
+      }
+      return {
+        id: activity.id,
+        label,
+        query,
+        queryCandidates,
+        kind: "予定" as const,
+        sortValue: normalizeTripMapSortValue(activity.date),
+        subtitle: activity.date ? formatShortDateTime(activity.date) : "予定"
+      } satisfies TripMapStop;
+    })
+    .filter(Boolean) as TripMapStop[];
+}
+
+function buildTripMapStopsFromTransportations(
+  transportations: Array<{
+    id: string;
+    mode: string;
+    from: string;
+    to: string;
+    depTime: string;
+    arrTime: string;
+  }>,
+  destinationHint: string
+) {
+  return transportations
+    .flatMap((transportation) => {
+      const mode = compactText(transportation.mode) || "移動";
+      const departure = compactText(transportation.from);
+      const arrival = compactText(transportation.to);
+      const depTime = compactText(transportation.depTime);
+      const arrTime = compactText(transportation.arrTime);
+      const stops: TripMapStop[] = [];
+
+      if (departure) {
+        stops.push({
+          id: `${transportation.id}-from`,
+          label: departure,
+          query: stripIataSuffix(departure),
+          queryCandidates: buildLocationQueryCandidates(departure, destinationHint),
+          kind: "移動",
+          sortValue: normalizeTripMapSortValue(depTime),
+          subtitle: `${mode} 出発${depTime ? ` ${formatShortDateTime(depTime)}` : ""}`
+        });
+      }
+
+      if (arrival) {
+        stops.push({
+          id: `${transportation.id}-to`,
+          label: arrival,
+          query: stripIataSuffix(arrival),
+          queryCandidates: buildLocationQueryCandidates(arrival, destinationHint),
+          kind: "移動",
+          sortValue: normalizeTripMapSortValue(arrTime || depTime),
+          subtitle: `${mode} 到着${arrTime ? ` ${formatShortDateTime(arrTime)}` : ""}`
+        });
+      }
+
+      return stops;
+    })
+    .filter(Boolean);
+}
+
+function TripOverviewMapCard({
+  stops
+}: {
+  stops: TripMapStop[];
+}) {
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const [resolvedStops, setResolvedStops] = useState<TripMapResolvedStop[]>([]);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [provider, setProvider] = useState("");
+
+  const stopsPayload = useMemo(
+    () =>
+      stops.map((stop) => ({
+        id: stop.id,
+        label: stop.label,
+        query: stop.query,
+        queryCandidates: stop.queryCandidates,
+        kind: stop.kind,
+        sortValue: stop.sortValue,
+        subtitle: stop.subtitle
+      })),
+    [stops]
+  );
+
+  useEffect(() => {
+    if (stopsPayload.length === 0) {
+      setResolvedStops([]);
+      setWarnings([]);
+      setError(null);
+      setLoading(false);
+      setProvider("");
+      return;
+    }
+
+    const controller = new AbortController();
+    setLoading(true);
+    setError(null);
+
+    fetch("/api/maps/overview", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ stops: stopsPayload }),
+      signal: controller.signal
+    })
+      .then(async (response) => {
+        const payload = (await response.json()) as TripOverviewResponse;
+        if (!response.ok) {
+          throw new Error(payload.detail || "旅程マップを取得できませんでした。");
+        }
+        setResolvedStops(Array.isArray(payload.points) ? payload.points : []);
+        setWarnings(
+          Array.isArray(payload.warnings)
+            ? payload.warnings.filter((item): item is string => typeof item === "string")
+            : []
+        );
+        setProvider(typeof payload.provider === "string" ? payload.provider : "");
+      })
+      .catch((fetchError: unknown) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setResolvedStops([]);
+        setWarnings([]);
+        setProvider("");
+        setError(
+          fetchError instanceof Error
+            ? fetchError.message
+            : "旅程マップを読み込めませんでした。"
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [stopsPayload]);
+
+  useEffect(() => {
+    if (!mapContainerRef.current || resolvedStops.length === 0) {
+      return;
+    }
+
+    let disposed = false;
+    let cleanup = () => {};
+
+    void import("maplibre-gl").then((module) => {
+      if (disposed || !mapContainerRef.current) {
+        return;
+      }
+
+      const maplibregl = module.default ?? module;
+      if (!maplibregl?.Map) {
+        setError("地図ライブラリの読み込みに失敗しました。");
+        return;
+      }
+      const map = new maplibregl.Map({
+        container: mapContainerRef.current,
+        style: "https://tiles.openfreemap.org/styles/liberty",
+        center: [resolvedStops[0].lng, resolvedStops[0].lat],
+        zoom: resolvedStops.length > 1 ? 9 : 12,
+        attributionControl: false
+      });
+
+      map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+      map.addControl(
+        new maplibregl.AttributionControl({
+          compact: true
+        })
+      );
+
+      map.on("load", () => {
+        if (resolvedStops.length > 1) {
+          map.addSource("trip-route", {
+            type: "geojson",
+            data: {
+              type: "Feature",
+              geometry: {
+                type: "LineString",
+                coordinates: resolvedStops.map((stop) => [stop.lng, stop.lat])
+              },
+              properties: {}
+            }
+          });
+
+          map.addLayer({
+            id: "trip-route-line",
+            type: "line",
+            source: "trip-route",
+            paint: {
+              "line-color": "#0f172a",
+              "line-opacity": 0.65,
+              "line-width": 3
+            }
+          });
+        }
+
+        const bounds = new maplibregl.LngLatBounds();
+        resolvedStops.forEach((stop, index) => {
+          const markerElement = document.createElement("div");
+          markerElement.className =
+            "flex h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-slate-900 text-xs font-semibold text-white shadow-lg";
+          markerElement.textContent = String(index + 1);
+          new maplibregl.Marker({ element: markerElement })
+            .setLngLat([stop.lng, stop.lat])
+            .setPopup(
+              new maplibregl.Popup({ offset: 16 }).setHTML(
+                `<div style="min-width:180px"><strong>${stop.label}</strong><br/><span style="color:#64748b">${stop.subtitle}</span><br/><span style="color:#64748b">${stop.placeName}</span></div>`
+              )
+            )
+            .addTo(map);
+          bounds.extend([stop.lng, stop.lat]);
+        });
+
+        if (resolvedStops.length > 1) {
+          map.fitBounds(bounds, {
+            padding: 48,
+            maxZoom: 13
+          });
+        }
+      });
+
+      cleanup = () => {
+        map.remove();
+      };
+    }).catch(() => {
+      if (!disposed) {
+        setError("地図ライブラリの読み込みに失敗しました。");
+      }
+    });
+
+    return () => {
+      disposed = true;
+      cleanup();
+    };
+  }, [resolvedStops]);
+
+  if (stops.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">
+            Trip Map
+          </p>
+          <h3 className="mt-1 text-lg font-semibold text-slate-900">旅程マップ</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            移動先、宿泊先、予定を日付順にまとめて表示します。前後の距離感もここで確認できます。
+          </p>
+        </div>
+        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+          {stops.length}スポット
+        </span>
+      </div>
+
+      <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+        {loading ? (
+          <div className="flex h-[260px] items-center justify-center text-sm text-slate-500">
+            地図を読み込み中...
+          </div>
+        ) : error ? (
+          <div className="flex h-[260px] items-center justify-center px-6 text-center text-sm text-slate-500">
+            {error}
+          </div>
+        ) : resolvedStops.length === 0 ? (
+          <div className="flex h-[260px] items-center justify-center px-6 text-center text-sm text-slate-500">
+            地図化できるスポットがありません。位置検索キー未設定の場合は `.env.local` に `GEOAPIFY_API_KEY` を追加してください。
+          </div>
+        ) : (
+          <div ref={mapContainerRef} className="h-[320px] w-full" />
+        )}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+        {provider ? (
+          <span className="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-600">
+            Geocoding: {provider}
+          </span>
+        ) : null}
+        {warnings.length > 0 ? (
+          <span className="rounded-full bg-amber-100 px-3 py-1 font-semibold text-amber-800">
+            {warnings[0]}
+          </span>
+        ) : null}
+      </div>
+
+      {resolvedStops.length > 0 ? (
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {resolvedStops.map((stop, index) => {
+            const distanceFromPrevious =
+              index > 0
+                ? getDistanceInKm(resolvedStops[index - 1], stop)
+                : null;
+            return (
+              <div
+                key={stop.id || `${stop.label}-${index}`}
+                className="rounded-2xl border border-slate-200 bg-slate-50 p-3"
+              >
+                <div className="flex items-start gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-900 text-sm font-semibold text-white">
+                    {index + 1}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold text-slate-900">{stop.label}</p>
+                      <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-600">
+                        {stop.kind}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">{stop.subtitle}</p>
+                    <p className="mt-1 text-xs text-slate-500">{stop.placeName}</p>
+                    {distanceFromPrevious !== null ? (
+                      <p className="mt-2 text-xs font-semibold text-slate-700">
+                        前のスポットから約 {formatTripMapDistance(distanceFromPrevious)}
+                      </p>
+                    ) : (
+                      <p className="mt-2 text-xs font-semibold text-slate-700">
+                        旅程のスタート地点
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function isInteractiveTarget(target: EventTarget | null) {
@@ -2272,8 +3293,11 @@ function SwipeDeleteCard({
 
 function PlanDetailContent({ user }: { user: User }) {
   const params = useParams();
+  const searchParams = useSearchParams();
   const planParam = typeof params?.id === "string" ? params.id : "";
   const { planPath, planId } = resolvePlanParam(planParam);
+  const bootAssist = (searchParams?.get("assist") ?? "").trim().toLowerCase();
+  const bootPrompt = (searchParams?.get("bootPrompt") ?? "").trim();
   const [plan, setPlan] = useState<TravelPlan | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [loadingPlan, setLoadingPlan] = useState(true);
@@ -2305,6 +3329,34 @@ function PlanDetailContent({ user }: { user: User }) {
   const [flightFetchingId, setFlightFetchingId] = useState<string | null>(null);
   const [flightFetchError, setFlightFetchError] = useState<string | null>(null);
   const [flightFetchErrorId, setFlightFetchErrorId] = useState<string | null>(null);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiImages, setAiImages] = useState<File[]>([]);
+  const [aiAssistantMode, setAiAssistantMode] = useState<AiAssistantMode>("consult");
+  const [aiMode, setAiMode] = useState<AiPlannerMode>("merge");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [aiWarnings, setAiWarnings] = useState<string[]>([]);
+  const [quickAssistOpen, setQuickAssistOpen] = useState(false);
+  const [hotelRecoLoading, setHotelRecoLoading] = useState(false);
+  const [hotelRecoError, setHotelRecoError] = useState<string | null>(null);
+  const [hotelRecoWarnings, setHotelRecoWarnings] = useState<string[]>([]);
+  const [hotelRecoSummary, setHotelRecoSummary] = useState<string | null>(null);
+  const [aiChatMessages, setAiChatMessages] = useState<AiChatMessage[]>([]);
+  const [pendingAiSuggestion, setPendingAiSuggestion] = useState<PendingAiSuggestion | null>(null);
+  const [aiChatLoadedKey, setAiChatLoadedKey] = useState("");
+  const [autoPlanBootPrepared, setAutoPlanBootPrepared] = useState(false);
+  const [autoPlanBootTriggered, setAutoPlanBootTriggered] = useState(false);
+  const aiChatEndRef = useRef<HTMLDivElement | null>(null);
+  const aiImageInputRef = useRef<HTMLInputElement | null>(null);
+  const autoPlanBootRef = useRef(false);
+  const canEditNow =
+    Boolean(plan?.path) &&
+    (plan?.userId === user.uid ||
+      plan?.ownerId === user.uid ||
+      (typeof plan?.path === "string" &&
+        (plan.path.startsWith(`users/${user.uid}/travelPlans/`) ||
+          plan.path.startsWith(`Users/${user.uid}/travelPlans/`))));
 
   const applyPlanToEdits = (current: TravelPlan) => {
     setEditValues({
@@ -2329,6 +3381,417 @@ function PlanDetailContent({ user }: { user: User }) {
     setActivityEdits(buildActivityDrafts(activities));
     setPackingEdits(buildPackingDrafts(packingList));
     setSavingsEdits(buildSavingsDrafts(savingsHistory));
+  };
+
+  const buildCurrentAiPlanContext = (): AiPlanSuggestion => ({
+    name: editValues.name.trim() || undefined,
+    destination: editValues.destination.trim() || undefined,
+    memo: editValues.memo.trim() || undefined,
+    startDate: editValues.startDate || null,
+    endDate: editValues.endDate || null,
+    transportations: applyTransportationDrafts(transportEdits),
+    hotels: applyHotelDrafts(hotelEdits),
+    activities: applyActivityDrafts(activityEdits),
+    packingList: applyPackingDrafts(packingEdits)
+  });
+
+  const applyAiSuggestion = (suggestion: AiPlanSuggestion, mode: AiPlannerMode) => {
+    setEditValues((prev) => ({
+      ...prev,
+      name:
+        mode === "replace"
+          ? suggestion.name ?? ""
+          : suggestion.name && suggestion.name.trim()
+            ? suggestion.name
+            : prev.name,
+      destination:
+        mode === "replace"
+          ? suggestion.destination ?? ""
+          : suggestion.destination && suggestion.destination.trim()
+            ? suggestion.destination
+            : prev.destination,
+      memo:
+        mode === "replace"
+          ? suggestion.memo ?? ""
+          : suggestion.memo && suggestion.memo.trim()
+            ? suggestion.memo
+            : prev.memo,
+      startDate:
+        mode === "replace"
+          ? toDateInputValue(suggestion.startDate)
+          : suggestion.startDate
+            ? toDateInputValue(suggestion.startDate)
+            : prev.startDate,
+      endDate:
+        mode === "replace"
+          ? toDateInputValue(suggestion.endDate)
+          : suggestion.endDate
+            ? toDateInputValue(suggestion.endDate)
+            : prev.endDate
+    }));
+
+    if (mode === "replace" || (suggestion.transportations?.length ?? 0) > 0) {
+      setTransportEdits(
+        sortTransportationDrafts(
+          buildTransportationDrafts(suggestion.transportations ?? [])
+        )
+      );
+    }
+    if (mode === "replace" || (suggestion.hotels?.length ?? 0) > 0) {
+      setHotelEdits(buildHotelDrafts(suggestion.hotels ?? []));
+    }
+    if (mode === "replace" || (suggestion.activities?.length ?? 0) > 0) {
+      setActivityEdits(buildActivityDrafts(suggestion.activities ?? []));
+    }
+    if (mode === "replace" || (suggestion.packingList?.length ?? 0) > 0) {
+      setPackingEdits(buildPackingDrafts(suggestion.packingList ?? []));
+    }
+  };
+
+  const aiChatStorageKey = useMemo(() => {
+    const scope = plan?.path || planPath || planId || "";
+    return scope ? `travelog:ai-chat:${scope}` : "";
+  }, [plan?.path, planId, planPath]);
+
+  const appendAiChatMessage = (
+    message: Omit<AiChatMessage, "id" | "createdAt" | "sources"> & {
+      sources?: AiChatSource[];
+    }
+  ) => {
+    const text = message.text.trim();
+    if (!text) {
+      return;
+    }
+    setAiChatMessages((prev) =>
+      [
+        ...prev,
+        {
+          id: createDraftId(),
+          role: message.role,
+          text,
+          warnings: message.warnings.filter(Boolean),
+          attachments: message.attachments.filter(Boolean),
+          sources: normalizeAiChatSources(message.sources ?? []),
+          createdAt: new Date().toISOString()
+        }
+      ].slice(-AI_CHAT_HISTORY_LIMIT)
+    );
+  };
+
+  const clearAiChatHistory = () => {
+    setAiChatMessages([]);
+    if (typeof window === "undefined" || !aiChatStorageKey) {
+      return;
+    }
+    try {
+      window.localStorage.removeItem(aiChatStorageKey);
+    } catch {}
+  };
+
+  const applyPendingSuggestion = (mode: AiPlannerMode) => {
+    if (!pendingAiSuggestion) {
+      return;
+    }
+    applyAiSuggestion(pendingAiSuggestion.suggestion, mode);
+    appendAiChatMessage({
+      role: "assistant",
+      text: mode === "replace" ? "AI提案を上書き反映しました。" : "AI提案を追記反映しました。",
+      warnings: pendingAiSuggestion.warnings,
+      attachments: []
+    });
+    setPendingAiSuggestion(null);
+    setAiSummary(null);
+    setAiWarnings([]);
+    setAiError(null);
+  };
+
+  const discardPendingSuggestion = () => {
+    if (!pendingAiSuggestion) {
+      return;
+    }
+    appendAiChatMessage({
+      role: "assistant",
+      text: "提案を破棄しました。必要なら条件を変えて再生成してください。",
+      warnings: [],
+      attachments: []
+    });
+    setPendingAiSuggestion(null);
+    setAiSummary(null);
+    setAiWarnings([]);
+  };
+
+  const mapHotelRecommendationsToCandidates = (
+    recommendations: HotelRecommendation[],
+    checkIn: string,
+    checkOut: string
+  ) =>
+    recommendations.map((hotel) => {
+      const noteParts = [
+        hotel.address ?? "",
+        hotel.score !== null
+          ? `レビュー ${hotel.score.toFixed(1)}${hotel.reviewCount !== null ? ` (${Math.round(hotel.reviewCount)}件)` : ""}`
+          : "",
+        hotel.source ? `source: ${hotel.source}` : ""
+      ].filter(Boolean);
+
+      return {
+        name: hotel.name,
+        price: hotel.price,
+        currency: normalizePriceCurrency(hotel.currency ?? "JPY"),
+        paid: false,
+        checkIn,
+        checkOut,
+        notes: noteParts.join(" / "),
+        link: hotel.link ?? ""
+      } satisfies ItemRecord;
+    });
+
+  const formatHotelPriceLabel = (hotel: HotelRecommendation) => {
+    if (hotel.price === null) {
+      return "価格未取得";
+    }
+    return `${normalizePriceCurrency(hotel.currency ?? "JPY")} ${Math.round(hotel.price).toLocaleString()}`;
+  };
+
+  const formatHotelScoreLabel = (hotel: HotelRecommendation) => {
+    if (hotel.score === null) {
+      return "未取得";
+    }
+    return hotel.reviewCount !== null
+      ? `${hotel.score.toFixed(1)} (${Math.round(hotel.reviewCount).toLocaleString()}件)`
+      : hotel.score.toFixed(1);
+  };
+
+  const buildHotelRecommendationsChatText = (
+    recommendations: HotelRecommendation[],
+    resolvedDestination: string
+  ) => {
+    const prices = recommendations
+      .map((hotel) => hotel.price)
+      .filter((price): price is number => price !== null);
+    const minPrice = prices.length > 0 ? Math.min(...prices) : null;
+    const maxScore = recommendations.reduce<number | null>((acc, hotel) => {
+      if (hotel.score === null) {
+        return acc;
+      }
+      return acc === null ? hotel.score : Math.max(acc, hotel.score);
+    }, null);
+    const maxReviewCount = recommendations.reduce<number | null>((acc, hotel) => {
+      if (hotel.reviewCount === null) {
+        return acc;
+      }
+      return acc === null ? hotel.reviewCount : Math.max(acc, hotel.reviewCount);
+    }, null);
+    const cheapestHotel = recommendations
+      .filter((hotel) => hotel.price !== null)
+      .sort((a, b) => (a.price ?? Number.POSITIVE_INFINITY) - (b.price ?? Number.POSITIVE_INFINITY))[0];
+    const highestRatedHotel = recommendations
+      .filter((hotel) => hotel.score !== null)
+      .sort((a, b) => {
+        const scoreDiff = (b.score ?? 0) - (a.score ?? 0);
+        if (scoreDiff !== 0) {
+          return scoreDiff;
+        }
+        return (b.reviewCount ?? 0) - (a.reviewCount ?? 0);
+      })[0];
+    const balancedHotel = recommendations
+      .filter((hotel) => hotel.price !== null && hotel.score !== null)
+      .sort((a, b) => {
+        const aScore = (a.score ?? 0) * 1000 - (a.price ?? 0) / 1000;
+        const bScore = (b.score ?? 0) * 1000 - (b.price ?? 0) / 1000;
+        return bScore - aScore;
+      })[0];
+
+    const pickRows: string[] = [];
+    if (cheapestHotel) {
+      pickRows.push(
+        `安さ重視: ${cheapestHotel.name} (${formatHotelPriceLabel(cheapestHotel)} / 評価 ${formatHotelScoreLabel(cheapestHotel)})`
+      );
+    }
+    if (highestRatedHotel && highestRatedHotel.name !== cheapestHotel?.name) {
+      pickRows.push(
+        `評価重視: ${highestRatedHotel.name} (評価 ${formatHotelScoreLabel(highestRatedHotel)} / 価格 ${formatHotelPriceLabel(highestRatedHotel)})`
+      );
+    }
+    if (
+      balancedHotel &&
+      balancedHotel.name !== cheapestHotel?.name &&
+      balancedHotel.name !== highestRatedHotel?.name
+    ) {
+      pickRows.push(
+        `バランス重視: ${balancedHotel.name} (価格 ${formatHotelPriceLabel(balancedHotel)} / 評価 ${formatHotelScoreLabel(balancedHotel)})`
+      );
+    }
+
+    const rows = recommendations.slice(0, 5).map((hotel, index) => {
+      const reasons: string[] = [];
+      if (minPrice !== null && hotel.price !== null) {
+        if (hotel.price <= minPrice * 1.03) {
+          reasons.push("価格が最安クラス");
+        } else if (hotel.price <= minPrice * 1.12) {
+          reasons.push("価格が比較的おさえめ");
+        }
+      }
+      if (maxScore !== null && hotel.score !== null && hotel.score >= Math.max(8.5, maxScore - 0.2)) {
+        reasons.push("レビュー評価が高い");
+      }
+      if (
+        maxReviewCount !== null &&
+        hotel.reviewCount !== null &&
+        hotel.reviewCount >= Math.max(200, maxReviewCount * 0.5)
+      ) {
+        reasons.push("レビュー件数が多く安心");
+      }
+      if (hotel.link) {
+        reasons.push("予約ページあり");
+      }
+      if (reasons.length === 0) {
+        reasons.push("価格と評価のバランスが良い");
+      }
+
+      const address = hotel.address?.trim() ? hotel.address.trim() : "エリア情報なし";
+      return [
+        `${index + 1}. ${hotel.name}`,
+        `   価格: ${formatHotelPriceLabel(hotel)}`,
+        `   評価: ${formatHotelScoreLabel(hotel)}`,
+        `   エリア: ${address}`,
+        `   推しポイント: ${reasons.join(" / ")}`
+      ].join("\n");
+    });
+
+    const picksSection =
+      pickRows.length > 0 ? `おすすめの見方\n${pickRows.map((row) => `- ${row}`).join("\n")}\n\n` : "";
+
+    return `${recommendations.length}件の候補を追加しました（${resolvedDestination}）\n\n${picksSection}${rows.join("\n\n")}`;
+  };
+
+  const toItemRecordArray = (value: unknown): ItemRecord[] =>
+    Array.isArray(value)
+      ? value.filter((item): item is ItemRecord => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+      : [];
+
+  const buildPendingSuggestionPreviewText = (suggestion: AiPlanSuggestion) => {
+    const previewLimit = 8;
+    const planName = typeof suggestion.name === "string" ? suggestion.name.trim() : "";
+    const destination = typeof suggestion.destination === "string" ? suggestion.destination.trim() : "";
+    const startDate = toDateOnly(suggestion.startDate);
+    const endDate = toDateOnly(suggestion.endDate);
+    const memo = typeof suggestion.memo === "string" ? suggestion.memo.trim() : "";
+    const transportations = toItemRecordArray(suggestion.transportations);
+    const hotels = toItemRecordArray(suggestion.hotels);
+    const activities = toItemRecordArray(suggestion.activities);
+    const packingItems = Array.isArray(suggestion.packingList) ? suggestion.packingList : [];
+
+    const transportLines = transportations.map((item) => {
+      const mode = getStringField(item, TRANSPORT_MODE_KEYS) || "移動";
+      const name = getStringField(item, TRANSPORT_NAME_KEYS);
+      const from = getLocationField(item, TRANSPORT_FROM_KEYS);
+      const to = getLocationField(item, TRANSPORT_TO_KEYS);
+      const route = from && to ? `${from} → ${to}` : from || to || "";
+      const detail = [name, route].filter(Boolean).join(" / ");
+      return `・${mode}${detail ? `: ${detail}` : ""}`;
+    });
+
+    const hotelLines = hotels.map((item) => {
+      const name = getStringField(item, HOTEL_NAME_KEYS) || "ホテル名未設定";
+      const price = getNumberField(item, HOTEL_PRICE_KEYS);
+      const currency = getItemCurrency(item, HOTEL_CURRENCY_KEYS);
+      const priceLabel =
+        price === null ? "価格未記載" : currency === "USD" ? formatUsd(price) : formatYen(price);
+      return `・${name} (${priceLabel})`;
+    });
+
+    const activityLines = activities.map((item) => {
+      const title = getStringField(item, ACTIVITY_TITLE_KEYS) || "予定名未設定";
+      const date = toDateOnly(getStringField(item, ACTIVITY_DATE_KEYS));
+      return `・${title}${date ? ` (${date})` : ""}`;
+    });
+
+    const packingLines = packingItems
+      .map((item) => {
+        if (typeof item === "string") {
+          return item.trim();
+        }
+        if (item && typeof item === "object" && !Array.isArray(item)) {
+          return getStringField(item as ItemRecord, PACKING_NAME_KEYS);
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .map((name) => `・${name}`);
+
+    const lines: string[] = [];
+    lines.push(`プラン名: ${planName || "未設定"}`);
+    lines.push(`目的地: ${destination || "未設定"}`);
+    lines.push(`日程: ${startDate || "未設定"} 〜 ${endDate || "未設定"}`);
+    lines.push(
+      `件数: 移動${transportations.length} / ホテル${hotels.length} / 予定${activities.length} / 持ち物${packingItems.length}`
+    );
+    if (memo) {
+      lines.push(`メモ: ${memo.length > 80 ? `${memo.slice(0, 80)}...` : memo}`);
+    }
+
+    const appendPreviewSection = (title: string, entries: string[]) => {
+      if (entries.length === 0) {
+        return;
+      }
+      lines.push("");
+      if (entries.length <= previewLimit) {
+        lines.push(`${title}（全${entries.length}件）`);
+        lines.push(...entries);
+        return;
+      }
+      lines.push(`${title}（先頭${previewLimit}件 / 全${entries.length}件）`);
+      lines.push(...entries.slice(0, previewLimit));
+      lines.push(`・…他${entries.length - previewLimit}件`);
+    };
+
+    appendPreviewSection("移動", transportLines);
+    appendPreviewSection("ホテル", hotelLines);
+    appendPreviewSection("予定", activityLines);
+    appendPreviewSection("持ち物", packingLines);
+
+    return lines.join("\n");
+  };
+
+  const requestHotelRecommendations = async ({
+    destination,
+    checkIn,
+    checkOut,
+    limit = 5
+  }: {
+    destination: string;
+    checkIn: string;
+    checkOut: string;
+    limit?: number;
+  }) => {
+    const response = await fetch("/api/hotels/recommendations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        destination,
+        checkIn,
+        checkOut,
+        adults: 2,
+        rooms: 1,
+        locale: "ja",
+        currency: "JPY",
+        limit
+      })
+    });
+
+    const payload = (await response.json()) as Partial<HotelRecommendationsResponse>;
+    if (!response.ok) {
+      throw new Error(getHotelRecommendationsErrorMessage(payload.error, payload.detail));
+    }
+
+    return {
+      recommendations: Array.isArray(payload.hotels) ? payload.hotels : [],
+      warnings: Array.isArray(payload.warnings)
+        ? payload.warnings.map((item) => item.trim()).filter(Boolean)
+        : [],
+      resolvedDestination: payload.destinationResolved?.name?.trim() || destination
+    };
   };
 
   const updateTransport = (
@@ -2534,6 +3997,397 @@ function PlanDetailContent({ user }: { user: User }) {
     }
   };
 
+  const handleAiImagesSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []).filter((file) =>
+      file.type.startsWith("image/")
+    );
+    setAiImages(files.slice(0, 3));
+    setAiError(null);
+    event.target.value = "";
+  };
+
+  const requestStructuredPlanSuggestion = async ({
+    prompt,
+    currentPlan
+  }: {
+    prompt: string;
+    currentPlan: AiPlanSuggestion;
+  }) => {
+    const formData = new FormData();
+    formData.set("prompt", prompt);
+    formData.set("currentPlan", JSON.stringify(currentPlan));
+    formData.set("assistantMode", "plan");
+    formData.set("enableWebSearch", "true");
+
+    const response = await fetch("/api/ai-plan", {
+      method: "POST",
+      body: formData
+    });
+    const payload = (await response.json()) as Partial<AiAssistantResponse>;
+    if (!response.ok || !payload.plan) {
+      throw new Error(getAiPlannerErrorMessage(payload.error, payload.detail));
+    }
+    return {
+      suggestion: payload.plan,
+      summary: payload.summary?.trim() || "AI下書き案を作成しました。",
+      warnings: Array.isArray(payload.warnings)
+        ? payload.warnings.map((item) => item.trim()).filter(Boolean)
+        : [],
+      sources: normalizeAiChatSources(payload.sources)
+    };
+  };
+
+  const handleGenerateAiPlan = async () => {
+    if ((!aiPrompt.trim() && aiImages.length === 0) || aiLoading) {
+      return;
+    }
+
+    const prompt = aiPrompt.trim();
+    const imageNames = aiImages.map((file) => file.name.trim()).filter(Boolean);
+    appendAiChatMessage({
+      role: "user",
+      text: prompt || (aiAssistantMode === "consult" ? "画像をもとに相談したい" : "画像をもとにプランを生成して"),
+      attachments: imageNames,
+      warnings: []
+    });
+    setAiPrompt("");
+
+    setAiLoading(true);
+    setAiError(null);
+    setAiSummary(null);
+    setAiWarnings([]);
+    setPendingAiSuggestion(null);
+
+    try {
+      const formData = new FormData();
+      formData.set("prompt", prompt);
+      const currentPlan = buildCurrentAiPlanContext();
+      formData.set("currentPlan", JSON.stringify(currentPlan));
+      formData.set(
+        "chatHistory",
+        JSON.stringify(
+          aiChatMessages.slice(-12).map((message) => ({
+            role: message.role,
+            text: message.text
+          }))
+        )
+      );
+      formData.set("assistantMode", aiAssistantMode);
+      if (aiAssistantMode === "consult" || aiAssistantMode === "plan") {
+        formData.set("enableWebSearch", "true");
+      }
+      aiImages.forEach((file) => {
+        formData.append("images", file);
+      });
+
+      const response = await fetch("/api/ai-plan", {
+        method: "POST",
+        body: formData
+      });
+      const payload = (await response.json()) as Partial<AiAssistantResponse>;
+
+      if (aiAssistantMode === "consult") {
+        const warnings = Array.isArray(payload.warnings)
+          ? payload.warnings.map((item) => item.trim()).filter(Boolean)
+          : [];
+        if (!response.ok || !payload.answer?.trim()) {
+          throw new Error(
+            getAiPlannerErrorMessage(payload.error, payload.detail)
+          );
+        }
+        const answer = payload.answer.trim();
+        setAiSummary(answer);
+        setAiWarnings(warnings);
+        setAiImages([]);
+        appendAiChatMessage({
+          role: "assistant",
+          text: answer,
+          warnings,
+          attachments: [],
+          sources: normalizeAiChatSources(payload.sources)
+        });
+        try {
+          const candidatePrompt = [
+            "以下の相談内容を、旅行プラン管理アプリに反映できる下書きに変換してください。",
+            "相談回答をベースに、移動・ホテル・予定・持ち物を可能な範囲で具体化してください。",
+            `ユーザー相談: ${prompt || "なし"}`,
+            `AI回答: ${answer}`
+          ].join("\n");
+          const candidate = await requestStructuredPlanSuggestion({
+            prompt: candidatePrompt,
+            currentPlan
+          });
+          const candidateWarnings = Array.from(
+            new Set([...warnings, ...candidate.warnings])
+          );
+          setPendingAiSuggestion({
+            suggestion: candidate.suggestion,
+            summary: "相談内容をもとに反映候補を作成しました。これでいいですか？",
+            warnings: candidateWarnings
+          });
+          appendAiChatMessage({
+            role: "assistant",
+            text: "相談内容をもとに反映候補を作成しました。これでいいですか？下のプレビューを確認して「追記で反映」か「上書きで反映」を選んでください。",
+            warnings: candidateWarnings,
+            attachments: [],
+            sources: candidate.sources
+          });
+        } catch {}
+        return;
+      }
+
+      const nextPlan = payload.plan;
+      const clarificationQuestions = Array.isArray(payload.questions)
+        ? payload.questions.map((item) => item.trim()).filter(Boolean)
+        : [];
+      if (payload.requiresClarification && clarificationQuestions.length > 0) {
+        const clarificationText = (
+          payload.answer?.trim() ||
+          "より具体的なプランにするため、いくつか確認させてください。"
+        ).trim();
+        const message = [
+          clarificationText,
+          ...clarificationQuestions.map((question, index) => `${index + 1}. ${question}`)
+        ].join("\n");
+        setAiSummary(clarificationText);
+        setAiWarnings([]);
+        setPendingAiSuggestion(null);
+        appendAiChatMessage({
+          role: "assistant",
+          text: message,
+          warnings: [],
+          attachments: [],
+          sources: normalizeAiChatSources(payload.sources)
+        });
+        return;
+      }
+
+      if (!response.ok || !nextPlan) {
+        throw new Error(
+          getAiPlannerErrorMessage(payload.error, payload.detail)
+        );
+      }
+
+      let summary = payload.summary?.trim() || "AI下書き案を作成しました。";
+      let warnings = Array.isArray(payload.warnings)
+        ? payload.warnings.map((item) => item.trim()).filter(Boolean)
+        : [];
+      let suggestion = nextPlan;
+
+      const noHotelSuggestions = (nextPlan.hotels?.length ?? 0) === 0;
+      if (hasHotelRecommendationIntent(prompt) && noHotelSuggestions) {
+        const destination =
+          editValues.destination.trim() ||
+          (typeof nextPlan.destination === "string"
+            ? nextPlan.destination.trim()
+            : "") ||
+          plan?.destination?.trim() ||
+          "";
+        const checkIn =
+          editValues.startDate.trim() ||
+          toDateOnly(nextPlan.startDate) ||
+          toDateOnly(currentPlan?.startDate) ||
+          "";
+        const checkOut =
+          editValues.endDate.trim() ||
+          toDateOnly(nextPlan.endDate) ||
+          toDateOnly(currentPlan?.endDate) ||
+          "";
+
+        if (destination && checkIn && checkOut) {
+          try {
+            const hotelResult = await requestHotelRecommendations({
+              destination,
+              checkIn,
+              checkOut,
+              limit: 5
+            });
+            if (hotelResult.recommendations.length > 0) {
+              suggestion = {
+                ...nextPlan,
+                hotels: mapHotelRecommendationsToCandidates(
+                  hotelResult.recommendations,
+                  checkIn,
+                  checkOut
+                )
+              };
+              summary = `${summary} ホテル候補${hotelResult.recommendations.length}件も提案しました。`;
+              warnings = Array.from(new Set([...warnings, ...hotelResult.warnings]));
+            } else {
+              warnings = Array.from(
+                new Set([
+                  ...warnings,
+                  ...hotelResult.warnings,
+                  "ホテル候補が見つかりませんでした。目的地名を具体化して再試行してください。"
+                ])
+              );
+            }
+          } catch {
+            warnings = Array.from(
+              new Set([
+                ...warnings,
+                "ホテル候補の自動提案を取得できませんでした。右下の「ホテル提案」ボタンで再試行してください。"
+              ])
+            );
+          }
+        } else {
+          warnings = Array.from(
+            new Set([
+              ...warnings,
+              "ホテル候補の提案には目的地と旅行日程が必要です。"
+            ])
+          );
+        }
+      }
+
+      setAiSummary(summary);
+      setAiWarnings(warnings);
+      if (autoPlanBootRef.current) {
+        applyAiSuggestion(suggestion, "replace");
+        setPendingAiSuggestion(null);
+        setAiAssistantMode("consult");
+        appendAiChatMessage({
+          role: "assistant",
+          text: `${summary}\n初期プランに自動反映しました。続けて相談モードで調整できます。`,
+          warnings,
+          attachments: [],
+          sources: normalizeAiChatSources(payload.sources)
+        });
+        autoPlanBootRef.current = false;
+      } else {
+        setPendingAiSuggestion({
+          suggestion,
+          summary,
+          warnings
+        });
+        appendAiChatMessage({
+          role: "assistant",
+          text: `${summary}\n下のプレビューで内容を確認して「追記で反映」か「上書きで反映」を選んでください。`,
+          warnings,
+          attachments: [],
+          sources: normalizeAiChatSources(payload.sources)
+        });
+      }
+      setAiImages([]);
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : getAiPlannerErrorMessage();
+      setAiError(message);
+      appendAiChatMessage({
+        role: "assistant",
+        text: message,
+        warnings: [],
+        attachments: []
+      });
+      autoPlanBootRef.current = false;
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleFetchHotelRecommendations = async () => {
+    if (hotelRecoLoading) {
+      return;
+    }
+
+    const destination = editValues.destination.trim() || plan?.destination?.trim() || "";
+    const checkIn = editValues.startDate.trim();
+    const checkOut = editValues.endDate.trim();
+    appendAiChatMessage({
+      role: "user",
+      text: `ホテル候補を取得して (${destination || "目的地未入力"} / ${checkIn || "日付未入力"} - ${checkOut || "日付未入力"})`,
+      warnings: [],
+      attachments: []
+    });
+
+    if (!destination) {
+      const message = "目的地を入力してから候補を取得してください。";
+      setHotelRecoError(message);
+      appendAiChatMessage({
+        role: "assistant",
+        text: message,
+        warnings: [],
+        attachments: []
+      });
+      return;
+    }
+    if (!checkIn || !checkOut) {
+      const message = "旅行日程を設定してから候補を取得してください。";
+      setHotelRecoError(message);
+      appendAiChatMessage({
+        role: "assistant",
+        text: message,
+        warnings: [],
+        attachments: []
+      });
+      return;
+    }
+
+    setHotelRecoLoading(true);
+    setHotelRecoError(null);
+    setHotelRecoWarnings([]);
+    setHotelRecoSummary(null);
+
+    try {
+      const hotelResult = await requestHotelRecommendations({
+        destination,
+        checkIn,
+        checkOut,
+        limit: 5
+      });
+      const recommendations = hotelResult.recommendations;
+      if (recommendations.length === 0) {
+        const warnings = hotelResult.warnings.length > 0
+          ? hotelResult.warnings
+          : ["候補を抽出できませんでした。目的地を具体的にして再試行してください。"];
+        const summary = "候補0件";
+        setHotelRecoWarnings(warnings);
+        setHotelRecoSummary(summary);
+        appendAiChatMessage({
+          role: "assistant",
+          text: summary,
+          warnings,
+          attachments: []
+        });
+        return;
+      }
+
+      const candidates = mapHotelRecommendationsToCandidates(
+        recommendations,
+        checkIn,
+        checkOut
+      );
+
+      setHotelEdits((prev) => [...prev, ...buildHotelDrafts(candidates)]);
+      const warnings = hotelResult.warnings;
+      const summary = `${recommendations.length}件の候補を追加しました（${hotelResult.resolvedDestination}）`;
+      setHotelRecoWarnings(warnings);
+      setHotelRecoSummary(summary);
+      appendAiChatMessage({
+        role: "assistant",
+        text: buildHotelRecommendationsChatText(recommendations, hotelResult.resolvedDestination),
+        warnings,
+        attachments: []
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : getHotelRecommendationsErrorMessage();
+      setHotelRecoError(message);
+      appendAiChatMessage({
+        role: "assistant",
+        text: message,
+        warnings: [],
+        attachments: []
+      });
+    } finally {
+      setHotelRecoLoading(false);
+    }
+  };
+
   const buildAutoSaveUpdates = () => {
     const updates: PlanUpdate = {
       name: editValues.name,
@@ -2567,7 +4421,7 @@ function PlanDetailContent({ user }: { user: User }) {
   const addTransport = () => {
     setTransportEdits((prev) => {
       const base = prev[0];
-      const modeValue = base?.mode.value ?? "新幹線";
+      const modeValue = base?.mode.value ?? "在来線";
       const modeKey = base?.mode.key || TRANSPORT_MODE_KEYS[0];
       const modeConfig = getModeConfig(modeValue);
       const serviceKey =
@@ -2598,7 +4452,7 @@ function PlanDetailContent({ user }: { user: User }) {
       if (seatKey) {
         item[seatKey] = "";
       }
-      if (modeValue === "在来線") {
+      if (supportsTransferInput(modeValue)) {
         item.transfers = [];
       }
       return sortTransportationDrafts([...prev, ...buildTransportationDrafts([item])]);
@@ -2726,6 +4580,104 @@ function PlanDetailContent({ user }: { user: User }) {
     };
   }, [plan?.path]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (!aiChatStorageKey) {
+      setAiChatMessages([]);
+      setAiChatLoadedKey("");
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(aiChatStorageKey);
+      if (!raw) {
+        setAiChatMessages([]);
+        setAiChatLoadedKey(aiChatStorageKey);
+        return;
+      }
+      const parsed = JSON.parse(raw) as unknown;
+      const messages = Array.isArray(parsed)
+        ? parsed
+            .map((item) => normalizeAiChatMessage(item))
+            .filter((item): item is AiChatMessage => Boolean(item))
+            .slice(-AI_CHAT_HISTORY_LIMIT)
+        : [];
+      setAiChatMessages(messages);
+      setAiChatLoadedKey(aiChatStorageKey);
+    } catch {
+      setAiChatMessages([]);
+      setAiChatLoadedKey(aiChatStorageKey);
+    }
+  }, [aiChatStorageKey]);
+
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      !aiChatStorageKey ||
+      aiChatLoadedKey !== aiChatStorageKey
+    ) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(aiChatStorageKey, JSON.stringify(aiChatMessages));
+    } catch {}
+  }, [aiChatMessages, aiChatLoadedKey, aiChatStorageKey]);
+
+  useEffect(() => {
+    if (!quickAssistOpen) {
+      return;
+    }
+    aiChatEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
+  }, [quickAssistOpen, aiChatMessages.length]);
+
+  useEffect(() => {
+    if (autoPlanBootPrepared) {
+      return;
+    }
+    if (bootAssist !== "plan" || !bootPrompt || loadingPlan || !canEditNow) {
+      return;
+    }
+    setQuickAssistOpen(true);
+    setAiAssistantMode("plan");
+    setAiPrompt(bootPrompt);
+    setAutoPlanBootPrepared(true);
+
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("assist");
+      url.searchParams.delete("bootPrompt");
+      const nextSearch = url.searchParams.toString();
+      window.history.replaceState(
+        null,
+        "",
+        `${url.pathname}${nextSearch ? `?${nextSearch}` : ""}${url.hash}`
+      );
+    }
+  }, [autoPlanBootPrepared, bootAssist, bootPrompt, canEditNow, loadingPlan]);
+
+  useEffect(() => {
+    if (
+      !autoPlanBootPrepared ||
+      autoPlanBootTriggered ||
+      aiLoading ||
+      aiAssistantMode !== "plan" ||
+      !aiPrompt.trim()
+    ) {
+      return;
+    }
+    autoPlanBootRef.current = true;
+    setAutoPlanBootTriggered(true);
+    void handleGenerateAiPlan();
+  }, [
+    aiAssistantMode,
+    aiLoading,
+    aiPrompt,
+    autoPlanBootPrepared,
+    autoPlanBootTriggered,
+    handleGenerateAiPlan
+  ]);
+
   const authorName = user.displayName ?? user.email ?? "ユーザー";
   const planSavedTotal =
     Array.isArray(plan?.savingsHistory) && plan.savingsHistory.length > 0
@@ -2838,6 +4790,100 @@ function PlanDetailContent({ user }: { user: User }) {
       ? Math.min(100, Math.round((coveredTotal / totalCost) * 100))
       : 0;
   const activities = Array.isArray(plan?.activities) ? plan.activities : [];
+  const mapDestinationHint = compactText(
+    editValues.destination || (typeof plan?.destination === "string" ? plan.destination : "")
+  );
+  const tripMapStops = useMemo(() => {
+    const transportStops = canEdit
+      ? buildTripMapStopsFromTransportations(
+          transportEdits.map((draft, index) => ({
+            id:
+              typeof draft.raw.id === "string" || typeof draft.raw.id === "number"
+                ? String(draft.raw.id)
+                : `transport-draft-${index}`,
+            mode: draft.mode.value,
+            from: draft.from.value,
+            to: draft.to.value,
+            depTime: draft.depTime.value,
+            arrTime: draft.arrTime.value
+          })),
+          mapDestinationHint
+        )
+      : buildTripMapStopsFromTransportations(
+          transportations.map((item, index) => ({
+            id: getStringField(item, ["id"]) || `transport-${index}`,
+            mode: getStringField(item, TRANSPORT_MODE_KEYS) || "",
+            from: getStringField(item, TRANSPORT_FROM_KEYS) || "",
+            to: getStringField(item, TRANSPORT_TO_KEYS) || "",
+            depTime: formatDateTime(getDateField(item, TRANSPORT_DEP_KEYS)) || "",
+            arrTime: formatDateTime(getDateField(item, TRANSPORT_ARR_KEYS)) || ""
+          })),
+          mapDestinationHint
+        );
+
+    const hotelStops = canEdit
+      ? buildTripMapStopsFromHotels(
+          hotelEdits.map((draft, index) => ({
+            id:
+              typeof draft.raw.id === "string" || typeof draft.raw.id === "number"
+                ? String(draft.raw.id)
+                : `hotel-draft-${index}`,
+            name: draft.name.value,
+            notes: draft.notes.value,
+            checkIn: draft.checkIn.value,
+            checkOut: draft.checkOut.value
+          })),
+          mapDestinationHint
+        )
+      : buildTripMapStopsFromHotels(
+          hotels.map((item, index) => ({
+            id: getStringField(item, ["id"]) || `hotel-${index}`,
+            name: getStringField(item, HOTEL_NAME_KEYS) || "",
+            notes: getStringField(item, NOTES_KEYS) || "",
+            checkIn: formatDateTime(getDateField(item, HOTEL_CHECKIN_KEYS)) || "",
+            checkOut: formatDateTime(getDateField(item, HOTEL_CHECKOUT_KEYS)) || ""
+          })),
+          mapDestinationHint
+        );
+
+    const activityStops = canEdit
+      ? buildTripMapStopsFromActivities(
+          activityEdits.map((draft, index) => ({
+            id:
+              typeof draft.raw.id === "string" || typeof draft.raw.id === "number"
+                ? String(draft.raw.id)
+                : `activity-draft-${index}`,
+            title: draft.title.value,
+            notes: draft.notes.value,
+            date: draft.date.value
+          })),
+          mapDestinationHint
+        )
+      : buildTripMapStopsFromActivities(
+          activities.map((item, index) => ({
+            id: getStringField(item, ["id"]) || `activity-${index}`,
+            title: getStringField(item, ACTIVITY_TITLE_KEYS) || "",
+            notes: getStringField(item, NOTES_KEYS) || "",
+            date: formatDateTime(getDateField(item, ACTIVITY_DATE_KEYS)) || ""
+          })),
+          mapDestinationHint
+        );
+
+    return dedupeTripMapStops(
+      [...transportStops, ...hotelStops, ...activityStops].sort((left, right) =>
+        left.sortValue.localeCompare(right.sortValue)
+      )
+    );
+  }, [
+    transportEdits,
+    transportations,
+    activities,
+    activityEdits,
+    canEdit,
+    hotelEdits,
+    hotels,
+    mapDestinationHint
+  ]);
   const packingList = Array.isArray(plan?.packingList) ? plan.packingList : [];
   const hasEditError = Boolean(editError);
   const transportIds = transportEdits.map((draft) => draft.id);
@@ -2977,6 +5023,8 @@ function PlanDetailContent({ user }: { user: User }) {
 
         {plan ? (
           <div className="space-y-6">
+            <TripOverviewMapCard stops={tripMapStops} />
+
             {!canEdit ? (
               <div className="rounded-2xl bg-white p-4 text-xs text-slate-500 shadow-cardSoft">
                 このログは編集できません。ログイン中のUIDと ownerId / userId が一致しているか確認してください。
@@ -2985,6 +5033,120 @@ function PlanDetailContent({ user }: { user: User }) {
             {canEdit ? (
               <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
                 <div className="space-y-3">
+                  <div className="hidden rounded-2xl border border-sky-100 bg-gradient-to-br from-sky-50 via-cyan-50 to-emerald-50 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-700">
+                          Travel Assist Beta
+                        </p>
+                        <h3 className="mt-1 text-sm font-semibold text-slate-900">
+                          ベータ機能でプラン下書きを生成
+                        </h3>
+                        <p className="mt-1 text-xs text-slate-600">
+                          行程表や予約画面の画像も読み取り、移動・ホテル・予定・持ち物に反映します。
+                        </p>
+                      </div>
+                      <div className="rounded-full border border-white/80 bg-white/80 px-3 py-1 text-[11px] font-semibold text-sky-700">
+                        BETA / GPT-4.1系
+                      </div>
+                    </div>
+                    <label className="mt-4 block text-xs font-semibold text-slate-600">
+                      指示文
+                      <textarea
+                        value={aiPrompt}
+                        onChange={(event) => {
+                          setAiPrompt(event.target.value);
+                          setAiError(null);
+                        }}
+                        rows={4}
+                        placeholder="例: 4月の京都2泊3日。新幹線で東京から移動、画像の予約内容も反映して、ざっくりした観光予定と持ち物も作って。"
+                        className="mt-2 w-full rounded-2xl border border-white/80 bg-white/90 px-3 py-3 text-sm text-slate-900 shadow-sm outline-none transition focus:border-sky-300"
+                      />
+                    </label>
+                    <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                      <label className="block text-xs font-semibold text-slate-600">
+                        画像
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={handleAiImagesSelected}
+                          className="mt-2 block w-full rounded-xl border border-white/80 bg-white/90 px-3 py-2 text-sm text-slate-700 file:mr-3 file:rounded-full file:border-0 file:bg-sky-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-sky-700"
+                        />
+                      </label>
+                      <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/80 bg-white/80 p-1 text-xs font-semibold text-slate-600">
+                        <button
+                          type="button"
+                          onClick={() => setAiMode("merge")}
+                          className={`rounded-xl px-3 py-2 transition ${
+                            aiMode === "merge"
+                              ? "bg-slate-900 text-white shadow-sm"
+                              : "bg-transparent text-slate-600"
+                          }`}
+                        >
+                          追記
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setAiMode("replace")}
+                          className={`rounded-xl px-3 py-2 transition ${
+                            aiMode === "replace"
+                              ? "bg-slate-900 text-white shadow-sm"
+                              : "bg-transparent text-slate-600"
+                          }`}
+                        >
+                          上書き
+                        </button>
+                      </div>
+                    </div>
+                    {aiImages.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {aiImages.map((file, index) => (
+                          <button
+                            key={`${file.name}-${file.size}-${index}`}
+                            type="button"
+                            onClick={() =>
+                              setAiImages((prev) => prev.filter((_, itemIndex) => itemIndex !== index))
+                            }
+                            className="rounded-full border border-sky-200 bg-white/90 px-3 py-1 text-[11px] font-medium text-slate-700"
+                          >
+                            {file.name} ×
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    {aiError ? (
+                      <div className="rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-600">
+                        {aiError}
+                      </div>
+                    ) : null}
+                    {aiSummary ? (
+                      <div className="rounded-xl bg-white/90 px-3 py-3 text-xs text-slate-700">
+                        <p className="font-semibold text-slate-900">生成結果</p>
+                        <p className="mt-1 leading-5">{aiSummary}</p>
+                        {aiWarnings.length > 0 ? (
+                          <div className="mt-2 space-y-1 text-amber-700">
+                            {aiWarnings.map((warning, index) => (
+                              <p key={`${warning}-${index}`}>・{warning}</p>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-[11px] leading-5 text-slate-500">
+                        画像は最大3枚、1枚あたり6MBまで。生成後はこの画面の内容に反映され、自動保存されます。
+                      </p>
+                      <button
+                        type="button"
+                        disabled={aiLoading || (!aiPrompt.trim() && aiImages.length === 0)}
+                        onClick={handleGenerateAiPlan}
+                        className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {aiLoading ? "生成中..." : "AIで下書き作成"}
+                      </button>
+                    </div>
+                  </div>
                   <label className="block text-xs font-semibold text-slate-500">
                     旅行名
                     <input
@@ -3025,32 +5187,57 @@ function PlanDetailContent({ user }: { user: User }) {
                       className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                     />
                   </label>
-                  <label className="block text-xs font-semibold text-slate-500">
-                    旅行日程
-                    <div className="mt-2">
-                      <StayDateRangePicker
-                        title="旅行日程"
-                        startDate={editValues.startDate}
-                        endDate={editValues.endDate}
-                        originalStartDate={toDateInputValue(plan.startDate)}
-                        originalEndDate={toDateInputValue(plan.endDate)}
-                        onChange={(nextStartDate, nextEndDate) =>
-                          setEditValues((prev) => ({
-                            ...prev,
-                            startDate: nextStartDate,
-                            endDate: nextEndDate
-                          }))
-                        }
-                      />
-                    </div>
-                  </label>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
-                    合計費用（自動）
-                    <div className="mt-2 text-sm font-semibold text-slate-900">
-                      {formatYen(computedTotalCost)}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      旅行日程
+                      <div className="mt-2">
+                        <StayDateRangePicker
+                          title="旅行日程"
+                          startDate={editValues.startDate}
+                          endDate={editValues.endDate}
+                          originalStartDate={toDateInputValue(plan.startDate)}
+                          originalEndDate={toDateInputValue(plan.endDate)}
+                          onChange={(nextStartDate, nextEndDate) =>
+                            setEditValues((prev) => ({
+                              ...prev,
+                              startDate: nextStartDate,
+                              endDate: nextEndDate
+                            }))
+                          }
+                        />
+                      </div>
+                    </label>
+                    <div className="rounded-xl border border-slate-200/80 bg-slate-100/80 px-4 py-3 text-slate-900">
+                      <p className="text-xs font-semibold text-slate-600">
+                        合計費用（自動）
+                      </p>
+                      <div className="mt-3 flex items-end justify-between gap-3">
+                        <div>
+                          <p className="text-2xl font-semibold leading-none text-slate-950">
+                            {formatYen(computedTotalCost)}
+                          </p>
+                          <p className="mt-2 text-xs text-slate-600">
+                            移動費とホテル代を自動集計
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-right">
+                          <p className="text-[11px] font-semibold text-slate-500">
+                            保存状態
+                          </p>
+                          <p className="mt-1 text-sm font-semibold text-slate-900">
+                            {autoSaveState === "saving"
+                              ? "更新中"
+                              : autoSaveState === "saved"
+                                ? "保存済み"
+                                : autoSaveState === "error"
+                                  ? "要確認"
+                                  : "自動保存"}
+                          </p>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-500">
+                  <label className="mt-1 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
                     <input
                       type="checkbox"
                       checked={editValues.isPublic}
@@ -3060,7 +5247,7 @@ function PlanDetailContent({ user }: { user: User }) {
                           isPublic: event.target.checked
                         }))
                       }
-                      className="h-4 w-4 rounded border-slate-300"
+                      className="h-4 w-4 rounded border-slate-400 text-slate-900"
                     />
                     公開する
                   </label>
@@ -3069,7 +5256,7 @@ function PlanDetailContent({ user }: { user: User }) {
                       {editError}
                     </div>
                   ) : null}
-                  <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
+                  <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600">
                     <span>
                       {saving || autoSaveState === "saving"
                         ? "自動保存中..."
@@ -3087,7 +5274,7 @@ function PlanDetailContent({ user }: { user: User }) {
                         }
                         setEditError(null);
                       }}
-                      className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700"
+                      className="rounded-full border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
                     >
                       リセット
                     </button>
@@ -3173,7 +5360,7 @@ function PlanDetailContent({ user }: { user: User }) {
                                             const serviceKey = config.serviceKeys?.[0] ?? "";
                                             const seatKey = config.seatKeys?.[0] ?? "";
                                             const nextRaw = { ...current.raw };
-                                            if (mode !== "在来線") {
+                                            if (!supportsTransferInput(mode)) {
                                               delete nextRaw.transfers;
                                             }
                                             return {
@@ -3190,8 +5377,9 @@ function PlanDetailContent({ user }: { user: User }) {
                                                 value: "",
                                                 original: ""
                                               },
-                                              transfers:
-                                                mode === "在来線" ? current.transfers : []
+                                              transfers: supportsTransferInput(mode)
+                                                ? current.transfers
+                                                : []
                                             };
                                           })
                                         }
@@ -3277,6 +5465,7 @@ function PlanDetailContent({ user }: { user: User }) {
                                                 {
                                                   id: createDraftId(),
                                                   station: "",
+                                                  serviceName: "",
                                                   arrivalTime: "",
                                                   departureTime: ""
                                                 }
@@ -3833,6 +6022,291 @@ function PlanDetailContent({ user }: { user: User }) {
                                       </div>
                                     </div>
                                   </div>
+                                  {draft.mode.value === "飛行機" ? (
+                                    <div className="mt-4 space-y-3">
+                                      <div className="flex items-center justify-between">
+                                        <p className="text-xs font-semibold text-slate-500">
+                                          経由便
+                                        </p>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            updateTransport(index, (current) => ({
+                                              ...current,
+                                              transfers: [
+                                                ...current.transfers,
+                                                ...buildTransferDrafts([
+                                                  {
+                                                    id: createDraftId(),
+                                                    station: "",
+                                                    serviceName: "",
+                                                    arrivalTime: "",
+                                                    departureTime: ""
+                                                  }
+                                                ])
+                                              ]
+                                            }))
+                                          }
+                                          className="flex items-center gap-1 rounded-full bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-600 transition-colors hover:bg-blue-100"
+                                        >
+                                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
+                                          経由便を追加
+                                        </button>
+                                      </div>
+                                      {draft.transfers.length === 0 ? (
+                                        <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">
+                                          まだ経由便がありません。
+                                        </div>
+                                      ) : (
+                                        <div className="space-y-2">
+                                          {draft.transfers.map((transfer, transferIndex) => {
+                                            const transferArrDate = extractDateOnly(transfer.arrTime.value);
+                                            const transferArrTime = extractTimeOnly(transfer.arrTime.value);
+                                            const transferDepDate = extractDateOnly(transfer.depTime.value);
+                                            const transferDepTime = extractTimeOnly(transfer.depTime.value);
+                                            return (
+                                              <div
+                                                key={`${transfer.id}-${transferIndex}`}
+                                                className="rounded-xl border border-slate-100 bg-slate-50 p-3"
+                                              >
+                                                <div className="flex items-center justify-between">
+                                                  <span className="text-xs font-semibold text-slate-500">
+                                                    経由 {transferIndex + 1}
+                                                  </span>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                      updateTransport(index, (current) => ({
+                                                        ...current,
+                                                        transfers: current.transfers.filter(
+                                                          (_, idx) => idx !== transferIndex
+                                                        )
+                                                      }))
+                                                    }
+                                                    className="text-xs font-semibold text-rose-500"
+                                                  >
+                                                    削除
+                                                  </button>
+                                                </div>
+                                                <div className="mt-2">
+                                                  <p className="text-xs font-semibold text-slate-500">
+                                                    便名
+                                                  </p>
+                                                  <div className="mt-2">
+                                                    <label className="block text-[11px] font-semibold text-transparent select-none">
+                                                      Flight
+                                                      <div className="relative mt-1 text-slate-900">
+                                                        <input
+                                                          value={transfer.serviceName.value}
+                                                          onChange={(event) =>
+                                                            updateTransport(index, (current) => ({
+                                                              ...current,
+                                                              transfers: current.transfers.map(
+                                                                (item, idx) =>
+                                                                  idx === transferIndex
+                                                                    ? {
+                                                                      ...item,
+                                                                      serviceName: {
+                                                                        ...item.serviceName,
+                                                                        value: event.target.value
+                                                                      }
+                                                                    }
+                                                                    : item
+                                                              )
+                                                            }))
+                                                          }
+                                                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100 placeholder-transparent"
+                                                        />
+                                                      </div>
+                                                    </label>
+                                                  </div>
+                                                </div>
+                                                <div className="mt-2">
+                                                  <p className="text-xs font-semibold text-slate-500">
+                                                    経由空港
+                                                  </p>
+                                                  <div className="mt-2">
+                                                    <label className="block text-[11px] font-semibold text-transparent select-none">
+                                                      Airport
+                                                      <div className="relative mt-1 text-slate-900">
+                                                        <input
+                                                          value={transfer.station.value}
+                                                          onChange={(event) =>
+                                                            updateTransport(index, (current) => ({
+                                                              ...current,
+                                                              transfers: current.transfers.map(
+                                                                (item, idx) =>
+                                                                  idx === transferIndex
+                                                                    ? {
+                                                                      ...item,
+                                                                      station: {
+                                                                        ...item.station,
+                                                                        value: event.target.value
+                                                                      }
+                                                                    }
+                                                                    : item
+                                                              )
+                                                            }))
+                                                          }
+                                                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100 placeholder-transparent"
+                                                        />
+                                                      </div>
+                                                    </label>
+                                                  </div>
+                                                </div>
+                                                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                                                    <p className="text-[11px] font-bold text-slate-500">
+                                                      1. この空港に到着
+                                                    </p>
+                                                    <p className="mt-1 text-[11px] text-slate-400">
+                                                      経由空港に着いた時刻
+                                                    </p>
+                                                    <div className="mt-2 grid gap-2 md:grid-cols-2">
+                                                      <label className="block text-[11px] font-semibold text-slate-500">
+                                                        日付
+                                                        <div className="mt-1">
+                                                          <PopoverDatePicker
+                                                            value={transferArrDate}
+                                                            onChange={(nextDate) =>
+                                                              updateTransport(index, (current) => ({
+                                                                ...current,
+                                                                transfers: current.transfers.map(
+                                                                  (item, idx) =>
+                                                                    idx === transferIndex
+                                                                      ? {
+                                                                        ...item,
+                                                                        arrTime: {
+                                                                          ...item.arrTime,
+                                                                          value: updateDateTimeValue(
+                                                                            item.arrTime.value,
+                                                                            nextDate,
+                                                                            undefined
+                                                                          )
+                                                                        }
+                                                                      }
+                                                                      : item
+                                                                )
+                                                              }))
+                                                            }
+                                                            onCommit={scheduleTransportSort}
+                                                          />
+                                                        </div>
+                                                      </label>
+                                                      <label className="block text-[11px] font-semibold text-slate-500">
+                                                        時刻
+                                                        <div className="mt-1">
+                                                          <input
+                                                            type="time"
+                                                            value={transferArrTime}
+                                                            onChange={(event) =>
+                                                              updateTransport(index, (current) => ({
+                                                                ...current,
+                                                                transfers: current.transfers.map(
+                                                                  (item, idx) =>
+                                                                    idx === transferIndex
+                                                                      ? {
+                                                                        ...item,
+                                                                        arrTime: {
+                                                                          ...item.arrTime,
+                                                                          value: updateDateTimeValue(
+                                                                            item.arrTime.value,
+                                                                            undefined,
+                                                                            event.target.value
+                                                                          )
+                                                                        }
+                                                                      }
+                                                                      : item
+                                                                )
+                                                              }))
+                                                            }
+                                                            onBlur={scheduleTransportSort}
+                                                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                                          />
+                                                        </div>
+                                                      </label>
+                                                    </div>
+                                                  </div>
+                                                  <div className="rounded-xl border border-slate-200 bg-white p-3">
+                                                    <p className="text-[11px] font-bold text-slate-500">
+                                                      2. この空港を出発
+                                                    </p>
+                                                    <p className="mt-1 text-[11px] text-slate-400">
+                                                      次の便が出発する時刻
+                                                    </p>
+                                                    <div className="mt-2 grid gap-2 md:grid-cols-2">
+                                                      <label className="block text-[11px] font-semibold text-slate-500">
+                                                        日付
+                                                        <div className="mt-1">
+                                                          <PopoverDatePicker
+                                                            value={transferDepDate}
+                                                            onChange={(nextDate) =>
+                                                              updateTransport(index, (current) => ({
+                                                                ...current,
+                                                                transfers: current.transfers.map(
+                                                                  (item, idx) =>
+                                                                    idx === transferIndex
+                                                                      ? {
+                                                                        ...item,
+                                                                        depTime: {
+                                                                          ...item.depTime,
+                                                                          value: updateDateTimeValue(
+                                                                            item.depTime.value,
+                                                                            nextDate,
+                                                                            undefined
+                                                                          )
+                                                                        }
+                                                                      }
+                                                                      : item
+                                                                )
+                                                              }))
+                                                            }
+                                                            onCommit={scheduleTransportSort}
+                                                          />
+                                                        </div>
+                                                      </label>
+                                                      <label className="block text-[11px] font-semibold text-slate-500">
+                                                        時刻
+                                                        <div className="mt-1">
+                                                          <input
+                                                            type="time"
+                                                            value={transferDepTime}
+                                                            onChange={(event) =>
+                                                              updateTransport(index, (current) => ({
+                                                                ...current,
+                                                                transfers: current.transfers.map(
+                                                                  (item, idx) =>
+                                                                    idx === transferIndex
+                                                                      ? {
+                                                                        ...item,
+                                                                        depTime: {
+                                                                          ...item.depTime,
+                                                                          value: updateDateTimeValue(
+                                                                            item.depTime.value,
+                                                                            undefined,
+                                                                            event.target.value
+                                                                          )
+                                                                        }
+                                                                      }
+                                                                      : item
+                                                                )
+                                                              }))
+                                                            }
+                                                            onBlur={scheduleTransportSort}
+                                                            className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-slate-400 focus:outline-none focus:ring-4 focus:ring-slate-100"
+                                                          />
+                                                        </div>
+                                                      </label>
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : null}
                                   <label className="mt-3 block text-xs font-semibold text-slate-500">
                                     メモ
                                     <textarea
@@ -3887,7 +6361,7 @@ function PlanDetailContent({ user }: { user: User }) {
                       getStringField(item, TRANSPORT_NAME_KEYS) ||
                       `移動 ${index + 1}`;
                     const mode = getStringField(item, TRANSPORT_MODE_KEYS);
-                    const modeConfig = getModeConfig(mode || "新幹線");
+                    const modeConfig = getModeConfig(mode || "在来線");
                     const serviceLabel = modeConfig.serviceLabel;
                     const seatLabel = modeConfig.seatLabel;
                     const serviceValue =
@@ -3976,10 +6450,10 @@ function PlanDetailContent({ user }: { user: User }) {
                             <span>DEP: {depTime || "—"}</span>
                             <span>ARR: {arrTime || "—"}</span>
                           </div>
-                          {mode === "在来線" && transfers.length > 0 ? (
+                          {supportsTransferInput(mode) && transfers.length > 0 ? (
                             <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-500">
                               <p className="font-semibold text-slate-500">
-                                乗換駅
+                                {mode === "飛行機" ? "経由便" : "乗換駅"}
                               </p>
                               <div className="mt-2 space-y-1">
                                 {transfers.map((transfer, transferIndex) => {
@@ -3988,6 +6462,10 @@ function PlanDetailContent({ user }: { user: User }) {
                                     "name",
                                     "title"
                                   ]);
+                                  const transferService = getStringField(
+                                    transfer,
+                                    TRANSFER_SERVICE_KEYS
+                                  );
                                   const transferArr = formatShortDateTime(
                                     getDateField(transfer, TRANSFER_ARR_KEYS)
                                   );
@@ -4000,7 +6478,9 @@ function PlanDetailContent({ user }: { user: User }) {
                                       className="flex flex-wrap items-center justify-between gap-2"
                                     >
                                       <span>
-                                        {transferIndex + 1}. {station || "駅名未設定"}
+                                        {transferIndex + 1}.{" "}
+                                        {station || (mode === "飛行機" ? "経由空港未設定" : "駅名未設定")}
+                                        {transferService ? ` (${transferService})` : ""}
                                       </span>
                                       <span className="text-slate-400">
                                         {transferArr || "—"} → {transferDep || "—"}
@@ -4032,191 +6512,225 @@ function PlanDetailContent({ user }: { user: User }) {
             <div className="space-y-2">
               <SectionTitle title="宿泊" />
               {canEdit ? (
-                hotelEdits.length === 0 ? (
-                  <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-cardSoft">
-                    まだ宿泊先が登録されていません。
+                <>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-cardSoft">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="text-xs text-slate-500">
+                        目的地と日程を使って候補ホテルを自動取得します。
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleFetchHotelRecommendations}
+                        disabled={hotelRecoLoading}
+                        className="rounded-full border border-slate-200 bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {hotelRecoLoading ? "取得中..." : "候補ホテルを取得"}
+                      </button>
+                    </div>
+                    {hotelRecoError ? (
+                      <div className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-600">
+                        {hotelRecoError}
+                      </div>
+                    ) : null}
+                    {hotelRecoSummary ? (
+                      <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                        {hotelRecoSummary}
+                      </div>
+                    ) : null}
+                    {hotelRecoWarnings.length > 0 ? (
+                      <div className="mt-2 space-y-1 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700">
+                        {hotelRecoWarnings.map((warning, index) => (
+                          <p key={`${warning}-${index}`}>・{warning}</p>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
-                ) : (
-                  <div className="space-y-3">
-                    {hotelEdits.map((draft, index) => {
-                      const checkInDate = extractDateOnly(draft.checkIn.value);
-                      const checkOutDate = extractDateOnly(draft.checkOut.value);
-                      const originalCheckInDate = extractDateOnly(draft.checkIn.original);
-                      const originalCheckOutDate = extractDateOnly(draft.checkOut.original);
-                      return (
-                        <SwipeDeleteCard
-                          key={`hotel-edit-${index}`}
-                          enabled={canEdit}
-                          onDelete={() => removeHotel(index)}
-                        >
-                          <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
-                          <div className="grid gap-3 md:grid-cols-2">
-                            <label className="block text-xs font-semibold text-slate-500">
-                              宿泊名
-                              <input
-                                value={draft.name.value}
-                                onChange={(event) =>
-                                  updateHotel(index, (current) => ({
-                                    ...current,
-                                    name: { ...current.name, value: event.target.value }
-                                  }))
-                                }
-                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                              />
-                            </label>
+                  {hotelEdits.length === 0 ? (
+                    <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-cardSoft">
+                      まだ宿泊先が登録されていません。
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {hotelEdits.map((draft, index) => {
+                        const checkInDate = extractDateOnly(draft.checkIn.value);
+                        const checkOutDate = extractDateOnly(draft.checkOut.value);
+                        const originalCheckInDate = extractDateOnly(draft.checkIn.original);
+                        const originalCheckOutDate = extractDateOnly(draft.checkOut.original);
+                        return (
+                          <SwipeDeleteCard
+                            key={`hotel-edit-${index}`}
+                            enabled={canEdit}
+                            onDelete={() => removeHotel(index)}
+                          >
+                            <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
                             <div className="grid gap-3 md:grid-cols-2">
                               <label className="block text-xs font-semibold text-slate-500">
-                                金額
+                                宿泊名
                                 <input
-                                  type="number"
-                                  inputMode="decimal"
-                                  value={draft.price.value}
+                                  value={draft.name.value}
                                   onChange={(event) =>
                                     updateHotel(index, (current) => ({
                                       ...current,
-                                      price: { ...current.price, value: event.target.value }
+                                      name: { ...current.name, value: event.target.value }
                                     }))
                                   }
                                   className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                                 />
                               </label>
-                              <label className="block text-xs font-semibold text-slate-500">
-                                通貨
-                                <select
-                                  value={normalizePriceCurrency(draft.currency.value)}
-                                  onChange={(event) =>
+                              <div className="grid gap-3 md:grid-cols-2">
+                                <label className="block text-xs font-semibold text-slate-500">
+                                  金額
+                                  <input
+                                    type="number"
+                                    inputMode="decimal"
+                                    value={draft.price.value}
+                                    onChange={(event) =>
+                                      updateHotel(index, (current) => ({
+                                        ...current,
+                                        price: { ...current.price, value: event.target.value }
+                                      }))
+                                    }
+                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                  />
+                                </label>
+                                <label className="block text-xs font-semibold text-slate-500">
+                                  通貨
+                                  <select
+                                    value={normalizePriceCurrency(draft.currency.value)}
+                                    onChange={(event) =>
+                                      updateHotel(index, (current) => ({
+                                        ...current,
+                                        currency: {
+                                          ...current.currency,
+                                          value: normalizePriceCurrency(event.target.value)
+                                        }
+                                      }))
+                                    }
+                                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                  >
+                                    <option value="JPY">円 (JPY)</option>
+                                    <option value="USD">ドル (USD)</option>
+                                  </select>
+                                </label>
+                              </div>
+                            </div>
+                            {(() => {
+                              const priceValue = toNumberOrNull(draft.price.value);
+                              if (
+                                priceValue === null ||
+                                normalizePriceCurrency(draft.currency.value) !== "USD"
+                              ) {
+                                return null;
+                              }
+                              return (
+                                <p className="mt-2 text-xs text-slate-500">
+                                  円換算: {formatYen(convertPriceToYen(priceValue, "USD"))}
+                                </p>
+                              );
+                            })()}
+                            <div className="mt-3">
+                              <p className="text-xs font-semibold text-slate-500">
+                                宿泊日程
+                              </p>
+                              <div className="mt-2">
+                                <StayDateRangePicker
+                                  startDate={checkInDate}
+                                  endDate={checkOutDate}
+                                  originalStartDate={originalCheckInDate}
+                                  originalEndDate={originalCheckOutDate}
+                                  onChange={(nextStartDate, nextEndDate) =>
                                     updateHotel(index, (current) => ({
                                       ...current,
-                                      currency: {
-                                        ...current.currency,
-                                        value: normalizePriceCurrency(event.target.value)
+                                      checkIn: {
+                                        ...current.checkIn,
+                                        value: nextStartDate
+                                      },
+                                      checkOut: {
+                                        ...current.checkOut,
+                                        value: nextEndDate
                                       }
                                     }))
                                   }
-                                  className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                                >
-                                  <option value="JPY">円 (JPY)</option>
-                                  <option value="USD">ドル (USD)</option>
-                                </select>
-                              </label>
+                                />
+                              </div>
                             </div>
-                          </div>
-                          {(() => {
-                            const priceValue = toNumberOrNull(draft.price.value);
-                            if (
-                              priceValue === null ||
-                              normalizePriceCurrency(draft.currency.value) !== "USD"
-                            ) {
-                              return null;
-                            }
-                            return (
-                              <p className="mt-2 text-xs text-slate-500">
-                                円換算: {formatYen(convertPriceToYen(priceValue, "USD"))}
-                              </p>
-                            );
-                          })()}
-                          <div className="mt-3">
-                            <p className="text-xs font-semibold text-slate-500">
-                              宿泊日程
-                            </p>
-                            <div className="mt-2">
-                              <StayDateRangePicker
-                                startDate={checkInDate}
-                                endDate={checkOutDate}
-                                originalStartDate={originalCheckInDate}
-                                originalEndDate={originalCheckOutDate}
-                                onChange={(nextStartDate, nextEndDate) =>
-                                  updateHotel(index, (current) => ({
-                                    ...current,
-                                    checkIn: {
-                                      ...current.checkIn,
-                                      value: nextStartDate
-                                    },
-                                    checkOut: {
-                                      ...current.checkOut,
-                                      value: nextEndDate
-                                    }
-                                  }))
-                                }
-                              />
-                            </div>
-                          </div>
-                          <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-500">
-                            <input
-                              type="checkbox"
-                              checked={draft.paid.value === true}
-                              onChange={(event) =>
-                                updateHotel(index, (current) => ({
-                                  ...current,
-                                  paid: {
-                                    ...current.paid,
-                                    value: event.target.checked
-                                  }
-                                }))
-                              }
-                              className="h-4 w-4 rounded border-slate-300"
-                            />
-                            支払い済み
-                          </label>
-                          <label className="mt-3 block text-xs font-semibold text-slate-500">
-                            メモ
-                            <textarea
-                              value={draft.notes.value}
-                              onChange={(event) =>
-                                updateHotel(index, (current) => ({
-                                  ...current,
-                                  notes: { ...current.notes, value: event.target.value }
-                                }))
-                              }
-                              rows={2}
-                              className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
-                            />
-                          </label>
-                          <label className="mt-3 block text-xs font-semibold text-slate-500">
-                            予約リンク
-                            <div className="mt-2 flex items-center gap-2">
+                            <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-500">
                               <input
-                                value={draft.link.value}
+                                type="checkbox"
+                                checked={draft.paid.value === true}
                                 onChange={(event) =>
                                   updateHotel(index, (current) => ({
                                     ...current,
-                                    link: { ...current.link, value: event.target.value }
+                                    paid: {
+                                      ...current.paid,
+                                      value: event.target.checked
+                                    }
                                   }))
                                 }
-                                placeholder="https://..."
-                                className="w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                className="h-4 w-4 rounded border-slate-300"
                               />
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  void pasteFromClipboard((text) =>
+                              支払い済み
+                            </label>
+                            <label className="mt-3 block text-xs font-semibold text-slate-500">
+                              メモ
+                              <textarea
+                                value={draft.notes.value}
+                                onChange={(event) =>
+                                  updateHotel(index, (current) => ({
+                                    ...current,
+                                    notes: { ...current.notes, value: event.target.value }
+                                  }))
+                                }
+                                rows={2}
+                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                              />
+                            </label>
+                            <label className="mt-3 block text-xs font-semibold text-slate-500">
+                              予約リンク
+                              <div className="mt-2 flex items-center gap-2">
+                                <input
+                                  value={draft.link.value}
+                                  onChange={(event) =>
                                     updateHotel(index, (current) => ({
                                       ...current,
-                                      link: { ...current.link, value: text }
+                                      link: { ...current.link, value: event.target.value }
                                     }))
-                                  )
-                                }
-                                className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-                              >
-                                貼り付け
-                              </button>
-                              {draft.link.value.trim() ? (
+                                  }
+                                  placeholder="https://..."
+                                  className="w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                />
                                 <button
                                   type="button"
-                                  onClick={() => openExternalLink(draft.link.value)}
+                                  onClick={() =>
+                                    void pasteFromClipboard((text) =>
+                                      updateHotel(index, (current) => ({
+                                        ...current,
+                                        link: { ...current.link, value: text }
+                                      }))
+                                    )
+                                  }
                                   className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                                 >
-                                  開く
+                                  貼り付け
                                 </button>
-                              ) : null}
+                                {draft.link.value.trim() ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => openExternalLink(draft.link.value)}
+                                    className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                                  >
+                                    開く
+                                  </button>
+                                ) : null}
+                              </div>
+                            </label>
                             </div>
-                          </label>
-                          </div>
-                        </SwipeDeleteCard>
-                      );
-                    })}
-                  </div>
-                )
+                          </SwipeDeleteCard>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
               ) : hotels.length === 0 ? (
                 <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-cardSoft">
                   まだ宿泊先が登録されていません。
@@ -4304,13 +6818,14 @@ function PlanDetailContent({ user }: { user: User }) {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {activityEdits.map((draft, index) => (
-                      <SwipeDeleteCard
-                        key={`activity-edit-${index}`}
-                        enabled={canEdit}
-                        onDelete={() => removeActivity(index)}
-                      >
-                        <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
+                    {activityEdits.map((draft, index) => {
+                      return (
+                        <SwipeDeleteCard
+                          key={`activity-edit-${index}`}
+                          enabled={canEdit}
+                          onDelete={() => removeActivity(index)}
+                        >
+                          <div className="rounded-2xl bg-white p-4 shadow-cardSoft">
                           <div className="grid gap-3 md:grid-cols-2">
                             <label className="block text-xs font-semibold text-slate-500">
                               タイトル
@@ -4395,7 +6910,8 @@ function PlanDetailContent({ user }: { user: User }) {
                           </label>
                         </div>
                       </SwipeDeleteCard>
-                    ))}
+                      );
+                    })}
                   </div>
                 )
               ) : activities.length === 0 ? (
@@ -4698,6 +7214,329 @@ function PlanDetailContent({ user }: { user: User }) {
             }}
           />
         </section>
+        {plan && canEdit ? (
+          <div className="fixed bottom-[calc(env(safe-area-inset-bottom)+76px)] right-4 z-40 w-[min(92vw,470px)]">
+            <div className="flex flex-col items-end gap-2">
+              {quickAssistOpen ? (
+                <div className="w-full rounded-3xl border border-sky-100 bg-sky-50/80 p-4 shadow-[0_24px_42px_-22px_rgba(15,23,42,0.28)]">
+                  <div className="flex items-center justify-between gap-2 border-b border-sky-100 pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-500 text-[11px] font-bold text-white">
+                        AI
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                          Travel Assist Beta
+                        </p>
+                        <h3 className="mt-0.5 text-base font-semibold text-slate-900">
+                          旅行アシスト（ベータ）
+                        </h3>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={clearAiChatHistory}
+                        className="rounded-full border border-sky-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        履歴クリア
+                      </button>
+                      <div className="rounded-full border border-sky-200 bg-white px-2.5 py-1 text-[10px] font-semibold text-slate-700">
+                        BETA / GPT-4.1系
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAiAssistantMode("consult")}
+                      className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
+                        aiAssistantMode === "consult"
+                          ? "bg-slate-900 text-white"
+                          : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                      }`}
+                    >
+                      相談モード
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAiAssistantMode("plan")}
+                      className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
+                        aiAssistantMode === "plan"
+                          ? "bg-slate-900 text-white"
+                          : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                      }`}
+                    >
+                      自動作成モード
+                    </button>
+                    <p className="ml-auto text-[11px] font-semibold text-slate-500">
+                      {aiAssistantMode === "consult" ? "Web検索ON" : "プレビュー確認後に反映"}
+                    </p>
+                  </div>
+                  <div className="mt-3 h-[32rem] rounded-2xl border border-slate-200 bg-white">
+                    <div className="h-full space-y-3 overflow-y-auto p-3">
+                      {aiChatMessages.length === 0 ? (
+                        <p className="rounded-xl border border-dashed border-slate-300 bg-white px-3 py-3 text-sm leading-6 text-slate-600">
+                          ベータ版の旅行アシスト履歴がここに残ります。作成結果や相談内容を後から見返せます。
+                        </p>
+                      ) : (
+                        aiChatMessages.map((message) => (
+                          <div
+                            key={message.id}
+                            className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                          >
+                            {message.role === "assistant" ? (
+                              <div className="mr-2 mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sky-500 text-[9px] font-bold text-white">
+                                AI
+                              </div>
+                            ) : null}
+                            <div
+                              className={`max-w-[90%] rounded-2xl px-4 py-3 text-[13.5px] leading-6 font-medium ${
+                                message.role === "user"
+                                  ? "bg-slate-900 text-slate-50 shadow-[0_10px_20px_-14px_rgba(15,23,42,0.85)]"
+                                  : "border border-slate-200 bg-slate-50 text-slate-900"
+                              }`}
+                            >
+                              <p
+                                className={`mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                                  message.role === "user" ? "text-slate-300" : "text-slate-500"
+                                }`}
+                              >
+                                {message.role === "user" ? "You" : "AI"}
+                              </p>
+                              <p className="whitespace-pre-wrap break-words font-medium">{message.text}</p>
+                              {message.attachments.length > 0 ? (
+                                <p
+                                  className={`mt-2 text-[11px] ${
+                                    message.role === "user" ? "text-slate-300" : "text-slate-600"
+                                  }`}
+                                >
+                                  画像: {message.attachments.join(", ")}
+                                </p>
+                              ) : null}
+                              {message.warnings.length > 0 ? (
+                                <div
+                                  className={`mt-2 space-y-1 text-[11px] ${
+                                    message.role === "user" ? "text-amber-200" : "text-amber-800"
+                                  }`}
+                                >
+                                  {message.warnings.map((warning, index) => (
+                                    <p key={`${message.id}-${index}`}>・{warning}</p>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {message.role === "assistant" && message.sources.length > 0 ? (
+                                <div className="mt-2 space-y-1.5 rounded-xl border border-slate-200 bg-white/80 p-2">
+                                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">Sources</p>
+                                  {message.sources.map((source, index) => (
+                                    <div key={`${message.id}-source-${index}`} className="space-y-0.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => openExternalLink(source.url)}
+                                        className="text-left text-[11px] font-semibold text-sky-700 underline-offset-2 transition hover:underline"
+                                      >
+                                        {index + 1}. {source.title}
+                                      </button>
+                                      {source.snippet ? (
+                                        <p className="text-[10.5px] leading-4 text-slate-600">{source.snippet}</p>
+                                      ) : null}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                              <p
+                                className={`mt-2 text-right text-[11px] ${
+                                  message.role === "user" ? "text-slate-300" : "text-slate-500"
+                                }`}
+                              >
+                                {formatAiChatTime(message.createdAt)}
+                              </p>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                      {aiLoading ? (
+                        <div className="flex justify-start">
+                          <div className="mr-2 mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sky-500 text-[9px] font-bold text-white">
+                            AI
+                          </div>
+                          <div className="max-w-[90%] rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                            <p className="animate-pulse">
+                              {aiAssistantMode === "consult"
+                                ? "AIが相談内容を調査して回答中..."
+                                : "AIがプラン案を生成中..."}
+                            </p>
+                          </div>
+                        </div>
+                      ) : null}
+                      {hotelRecoLoading ? (
+                        <div className="flex justify-start">
+                          <div className="mr-2 mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sky-500 text-[9px] font-bold text-white">
+                            AI
+                          </div>
+                          <div className="max-w-[90%] rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                            <p className="animate-pulse">ホテル候補を検索中...</p>
+                          </div>
+                        </div>
+                      ) : null}
+                      <div ref={aiChatEndRef} />
+                    </div>
+                  </div>
+                  {aiError ? (
+                    <p className="mt-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-700">{aiError}</p>
+                  ) : null}
+                  <div className="mt-3">
+                    <input
+                      ref={aiImageInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      onChange={handleAiImagesSelected}
+                      className="hidden"
+                    />
+                    <div className="flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-2">
+                      <textarea
+                        value={aiPrompt}
+                        onChange={(event) => {
+                          setAiPrompt(event.target.value);
+                          setAiError(null);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key !== "Enter" || event.shiftKey) {
+                            return;
+                          }
+                          if (event.nativeEvent.isComposing) {
+                            return;
+                          }
+                          event.preventDefault();
+                          void handleGenerateAiPlan();
+                        }}
+                        rows={1}
+                        placeholder={
+                          aiAssistantMode === "consult"
+                            ? "例: 台湾で3泊4日、家族向けでおすすめを相談したい"
+                            : "例: 3月末の台北4日、移動とホテル込みで下書きを作って"
+                        }
+                        className="h-7 flex-1 resize-none bg-transparent px-1 text-sm font-medium leading-7 text-slate-900 outline-none placeholder:font-medium placeholder:text-slate-400"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => aiImageInputRef.current?.click()}
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 transition hover:bg-slate-50"
+                        aria-label="画像を追加"
+                      >
+                        <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 5v14M5 12h14" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={aiLoading || (!aiPrompt.trim() && aiImages.length === 0)}
+                        onClick={handleGenerateAiPlan}
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-500 text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:bg-slate-400"
+                        aria-label="送信"
+                      >
+                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M22 2L11 13" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M22 2L15 22l-4-9-9-4 20-7z" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleFetchHotelRecommendations()}
+                          disabled={hotelRecoLoading}
+                          className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                        >
+                          {hotelRecoLoading ? "候補取得中..." : "ホテル提案"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAiPrompt(
+                              aiAssistantMode === "consult"
+                                ? "台湾で3泊4日のおすすめの過ごし方を、移動負荷が少ない順で3案ください。"
+                                : "おすすめの移動手段とホテル候補を入れた旅行プランの下書きを作って。"
+                            )
+                          }
+                          className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          テンプレ
+                        </button>
+                      </div>
+                      {aiImages.length > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => setAiImages([])}
+                          className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                        >
+                          画像 {aiImages.length}枚 クリア
+                        </button>
+                      ) : (
+                        <p className="text-[11px] font-medium text-slate-500">Enterで送信 / Shift+Enterで改行</p>
+                      )}
+                    </div>
+                  </div>
+                  {pendingAiSuggestion ? (
+                    <div className="mt-2.5 rounded-2xl border border-sky-200 bg-white p-3 text-xs text-slate-700">
+                      <p className="font-semibold text-slate-900">{pendingAiSuggestion.summary}</p>
+                      {pendingAiSuggestion.warnings.length > 0 ? (
+                        <div className="mt-1 space-y-0.5 text-amber-700">
+                          {pendingAiSuggestion.warnings.map((warning, index) => (
+                            <p key={`pending-warning-${index}`}>・{warning}</p>
+                          ))}
+                        </div>
+                      ) : null}
+                      <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+                        <p className="text-xs font-bold text-slate-800">提案内容プレビュー</p>
+                        <p className="mt-1 max-h-44 overflow-y-auto whitespace-pre-wrap text-xs leading-5 font-medium text-slate-800">
+                          {buildPendingSuggestionPreviewText(pendingAiSuggestion.suggestion)}
+                        </p>
+                      </div>
+                      <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                        <button
+                          type="button"
+                          onClick={() => applyPendingSuggestion("merge")}
+                          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          追記で反映
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => applyPendingSuggestion("replace")}
+                          className="rounded-full bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800"
+                        >
+                          上書きで反映
+                        </button>
+                        <button
+                          type="button"
+                          onClick={discardPendingSuggestion}
+                          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                        >
+                          破棄
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setQuickAssistOpen((current) => !current)}
+                className={`rounded-full px-4 py-2.5 text-xs font-semibold transition ${
+                  quickAssistOpen
+                    ? "border border-slate-300 bg-white text-slate-700 shadow-sm hover:bg-slate-50"
+                    : "bg-slate-900 text-white shadow-[0_18px_32px_-16px_rgba(15,23,42,0.82)] hover:bg-slate-800"
+                }`}
+                aria-expanded={quickAssistOpen}
+              >
+                {quickAssistOpen ? "旅行アシスト（β）を閉じる" : "旅行アシスト（β）"}
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </PageShell>
   );

@@ -1,12 +1,72 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { User } from "firebase/auth";
 import { useRouter } from "next/navigation";
 import AuthGate from "@/components/AuthGate";
 import PageShell from "@/components/PageShell";
 import PlanRow from "@/components/PlanRow";
-import { createPlan, deletePlan, getMyPlans, type TravelPlan } from "@/lib/firestore";
+import {
+  archivePlan,
+  createPlan,
+  deletePlan,
+  getMyPlans,
+  type TravelPlan
+} from "@/lib/firestore";
+
+function toDateEpoch(value: TravelPlan["startDate"] | TravelPlan["endDate"]) {
+  if (!value) {
+    return null;
+  }
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isNaN(time) ? null : time;
+  }
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    const time = parsed.getTime();
+    return Number.isNaN(time) ? null : time;
+  }
+  if ("toDate" in value && typeof value.toDate === "function") {
+    const parsed = value.toDate();
+    const time = parsed.getTime();
+    return Number.isNaN(time) ? null : time;
+  }
+  return null;
+}
+
+function compareOptionalDateDesc(a: number | null, b: number | null) {
+  if (a === b) {
+    return 0;
+  }
+  if (a === null) {
+    return 1;
+  }
+  if (b === null) {
+    return -1;
+  }
+  return b - a;
+}
+
+function sortPlansBySchedule(items: TravelPlan[]) {
+  return [...items].sort((a, b) => {
+    const startCompare = compareOptionalDateDesc(
+      toDateEpoch(a.startDate),
+      toDateEpoch(b.startDate)
+    );
+    if (startCompare !== 0) {
+      return startCompare;
+    }
+    const endCompare = compareOptionalDateDesc(
+      toDateEpoch(a.endDate),
+      toDateEpoch(b.endDate)
+    );
+    if (endCompare !== 0) {
+      return endCompare;
+    }
+    return (a.name || "").localeCompare(b.name || "", "ja");
+  });
+}
 
 function MyLogContent({ user }: { user: User }) {
   const router = useRouter();
@@ -14,6 +74,11 @@ function MyLogContent({ user }: { user: User }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const sortedPlans = useMemo(() => sortPlansBySchedule(plans), [plans]);
+  const visiblePlans = useMemo(
+    () => sortedPlans.filter((plan) => plan.archived !== true),
+    [sortedPlans]
+  );
 
   useEffect(() => {
     let active = true;
@@ -65,6 +130,15 @@ function MyLogContent({ user }: { user: User }) {
       >
         {creating ? "作成中..." : "新しいLogを作成"}
       </button>
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => router.push("/plans/assist")}
+          className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+        >
+          旅行アシスト（ベータ）を開く
+        </button>
+      </div>
       {error ? (
         <div className="rounded-2xl bg-white p-4 text-sm text-rose-500 shadow-cardSoft">
           {error}
@@ -74,16 +148,31 @@ function MyLogContent({ user }: { user: User }) {
         <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-cardSoft">
           読み込み中...
         </div>
-      ) : plans.length === 0 ? (
+      ) : visiblePlans.length === 0 ? (
         <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-cardSoft">
           まだ旅行プランがありません。
         </div>
       ) : (
-        plans.map((plan) => (
+        visiblePlans.map((plan) => (
           <PlanRow
             key={plan.path}
             plan={plan}
             canDelete
+            canArchive
+            onArchive={async (target) => {
+              try {
+                const nextArchived = !(target.archived === true);
+                await archivePlan(target.path, nextArchived);
+                setPlans((prev) =>
+                  prev.map((item) =>
+                    item.path === target.path ? { ...item, archived: nextArchived } : item
+                  )
+                );
+              } catch (err) {
+                setError("アーカイブ更新に失敗しました。");
+                console.error(err);
+              }
+            }}
             onDelete={async (target) => {
               try {
                 await deletePlan(target.path);
