@@ -3104,7 +3104,7 @@ function TripOverviewMapCard({
           </p>
           <h3 className="mt-1 text-lg font-semibold text-slate-900">旅程マップ</h3>
           <p className="mt-1 text-sm text-slate-500">
-            移動先、宿泊先、予定を日付順にまとめて表示します。前後の距離感もここで確認できます。
+            宿泊先と予定を中心に日付順で表示します。前後の距離感もここで確認できます。
           </p>
         </div>
         <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
@@ -4869,10 +4869,10 @@ function PlanDetailContent({ user }: { user: User }) {
           mapDestinationHint
         );
 
+    const coreStops = [...hotelStops, ...activityStops];
+    const visibleStops = coreStops.length > 0 ? coreStops : transportStops;
     return dedupeTripMapStops(
-      [...transportStops, ...hotelStops, ...activityStops].sort((left, right) =>
-        left.sortValue.localeCompare(right.sortValue)
-      )
+      visibleStops.sort((left, right) => left.sortValue.localeCompare(right.sortValue))
     );
   }, [
     transportEdits,

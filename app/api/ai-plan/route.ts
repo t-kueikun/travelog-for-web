@@ -987,7 +987,7 @@ function mergeTransportationsWithFlightCandidates(
   flights: Array<Record<string, unknown>>
 ) {
   const nonFlight = current.filter((item) => !isFlightLikeTransportation(item));
-  return [...nonFlight, ...flights];
+  return mergeTransportationCandidates(nonFlight, flights);
 }
 
 function stripUnreliableFlightTransportations(current: Array<Record<string, unknown>>) {
