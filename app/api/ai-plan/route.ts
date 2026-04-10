@@ -131,6 +131,7 @@ const PLAN_RESPONSE_SCHEMA = {
               currency: { type: ["string", "null"] },
               paid: { type: ["boolean", "null"] },
               notes: { type: ["string", "null"] },
+              link: { type: ["string", "null"] },
               transfers: {
                 type: "array",
                 items: {
@@ -158,6 +159,7 @@ const PLAN_RESPONSE_SCHEMA = {
               "currency",
               "paid",
               "notes",
+              "link",
               "transfers"
             ]
           }
@@ -351,6 +353,8 @@ function buildPrompt({
     "warnings は本当に重要な未確定項目のみを短く出してください。冗長な注意書きは避け、最大4件程度にしてください。",
     "画像から読める交通機関、ホテル、観光予定、持ち物、日付、金額があれば抽出してください。",
     "ホテル・移動・観光は、入力から合理的に推定できる候補を優先して埋めてください。",
+    "出発地と目的地は旅程全体の主要な起点・終点として扱ってください。最寄駅アクセスを勝手に細かい複数移動へ分解しないでください。",
+    "長距離の国内移動では、主要な飛行機または新幹線の1本を優先して入れてください。ローカル移動だけで全体移動を埋めないでください。",
     "出力は必ずJSONのみで、Markdownや説明文を混ぜないでください。",
     "日付は原則 YYYY-MM-DD、日時が必要なら YYYY-MM-DDTHH:mm にしてください。",
     "通貨は JPY または USD のみを使ってください。",
@@ -451,7 +455,18 @@ function buildTransportationMergeKey(item: Record<string, unknown>) {
 const TRANSPORT_LOCATION_ALIASES: Array<{ canonical: string; patterns: RegExp[] }> = [
   {
     canonical: "tokyo",
-    patterns: [/東京|tokyo/i, /羽田|haneda|hnd/i, /成田|narita|nrt/i, /品川|shinagawa/i]
+    patterns: [
+      /東京|tokyo/i,
+      /羽田|haneda|hnd/i,
+      /成田|narita|nrt/i,
+      /品川|shinagawa/i,
+      /神奈川|kanagawa/i,
+      /横浜|yokohama/i,
+      /川崎|kawasaki/i,
+      /鎌倉|kamakura/i,
+      /逗子|zushi/i,
+      /湘南|shonan/i
+    ]
   },
   {
     canonical: "osaka",
@@ -499,6 +514,50 @@ const TRANSPORT_LOCATION_ALIASES: Array<{ canonical: string; patterns: RegExp[] 
   {
     canonical: "london",
     patterns: [/ロンドン|london/i, /lhr\b/i, /lgw\b/i]
+  }
+];
+
+const FLIGHT_SEARCH_LOCATION_HINTS: Array<{
+  replacement: string;
+  patterns: RegExp[];
+}> = [
+  {
+    replacement: "羽田空港",
+    patterns: [
+      /神奈川|kanagawa/i,
+      /横浜|yokohama/i,
+      /川崎|kawasaki/i,
+      /鎌倉|kamakura/i,
+      /逗子|zushi/i,
+      /湘南|shonan/i,
+      /品川|shinagawa/i,
+      /東京|tokyo/i,
+      /羽田|haneda|hnd/i
+    ]
+  },
+  {
+    replacement: "成田空港",
+    patterns: [/成田|narita|nrt/i, /千葉|chiba/i]
+  },
+  {
+    replacement: "新千歳空港",
+    patterns: [/札幌|sapporo/i, /北海道|hokkaido/i, /新千歳|chitose|cts/i]
+  },
+  {
+    replacement: "伊丹空港",
+    patterns: [/大阪|osaka/i, /伊丹|itami|itm/i, /新大阪|shin-?osaka/i, /梅田|umeda/i]
+  },
+  {
+    replacement: "関西国際空港",
+    patterns: [/関西|kansai|kix/i]
+  },
+  {
+    replacement: "福岡空港",
+    patterns: [/福岡|fukuoka/i, /博多|hakata/i]
+  },
+  {
+    replacement: "那覇空港",
+    patterns: [/那覇|naha/i, /沖縄|okinawa/i]
   }
 ];
 
@@ -888,6 +947,22 @@ function hasAirportSignalText(value: string) {
   return /空港|airport/i.test(normalized) || /\b[A-Z]{3}\b/.test(normalized);
 }
 
+function inferFlightSearchLocation(value: string) {
+  const normalized = cleanString(value);
+  if (!normalized) {
+    return "";
+  }
+  if (hasAirportSignalText(normalized)) {
+    return normalized;
+  }
+  for (const hint of FLIGHT_SEARCH_LOCATION_HINTS) {
+    if (hint.patterns.some((pattern) => pattern.test(normalized))) {
+      return hint.replacement;
+    }
+  }
+  return normalized;
+}
+
 function extractLabeledLineValue(prompt: string, labels: string[]) {
   const lines = prompt.split(/\r?\n/);
   for (const rawLine of lines) {
@@ -937,19 +1012,27 @@ function isLikelyEstimatedTransportation(item: Record<string, unknown>) {
   if (!text) {
     return false;
   }
-  return /推定|要確認|未確定|不明|候補|目安|仮|要調整|調整中|確認|モデル|想定|暫定|参考/i.test(
+  return /推定|要確認|未確定|不明|候補|目安|仮|要調整|調整中|確認|モデル|想定|暫定|参考|例[:：]|サンプル|example/i.test(
     text
   );
 }
 
 function hasApiBackedFlightSignal(item: Record<string, unknown>) {
   const notes = cleanString(item.notes);
-  return /source:\s*(serpapi\/google_flights|scrapeless\/google_flights)/i.test(notes);
+  const link = cleanString(item.link);
+  return (
+    /source:\s*(serpapi\/google_flights|scrapeless\/google_flights)/i.test(notes) ||
+    /https?:\/\/www\.google\.com\/travel\/flights\?/i.test(notes) ||
+    /https?:\/\/www\.google\.com\/travel\/flights\?/i.test(link)
+  );
 }
 
 function hasFlightNumberLikeSignal(item: Record<string, unknown>) {
   const service = cleanString(item.serviceName ?? item.name ?? item.flightNumber ?? item.flightNo);
   if (!service) {
+    return false;
+  }
+  if (/例[:：]|サンプル|example/i.test(service)) {
     return false;
   }
   return /\b[A-Z0-9]{2,3}\s?\d{1,4}\b/i.test(service);
@@ -1096,6 +1179,25 @@ function pickPreferredFlightLocation(candidates: string[]) {
     return "";
   }
   return cleaned.find((value) => hasAirportSignalText(value)) || cleaned[0];
+}
+
+function hasLikelyDomesticLongDistanceSignal(from: string, to: string) {
+  const normalizedFrom = normalizeTransportationLocation(from);
+  const normalizedTo = normalizeTransportationLocation(to);
+  if (!normalizedFrom || !normalizedTo || normalizedFrom === normalizedTo) {
+    return false;
+  }
+  const pair = new Set([normalizedFrom, normalizedTo]);
+  if (pair.has("sapporo") || pair.has("naha")) {
+    return true;
+  }
+  return (
+    (pair.has("tokyo") && pair.has("osaka")) ||
+    (pair.has("tokyo") && pair.has("fukuoka")) ||
+    (pair.has("tokyo") && pair.has("hiroshima")) ||
+    (pair.has("osaka") && pair.has("sapporo")) ||
+    (pair.has("fukuoka") && pair.has("sapporo"))
+  );
 }
 
 function normalizeMatchText(value: string) {
@@ -1557,9 +1659,6 @@ async function fetchTransitCandidatesFromEkispert({
 
 function buildHotelNote(hotel: HotelRecommendation) {
   const parts: string[] = [];
-  if (hotel.address) {
-    parts.push(hotel.address);
-  }
   if (typeof hotel.score === "number") {
     const review =
       typeof hotel.reviewCount === "number"
@@ -1580,6 +1679,7 @@ function mapHotelCandidates(
 ) {
   return hotels.slice(0, MAX_AUTO_APPLY_HOTELS).map((hotel) => ({
     name: hotel.name,
+    address: cleanString(hotel.address) || undefined,
     price: typeof hotel.price === "number" ? hotel.price : null,
     currency: cleanString(hotel.currency).toUpperCase() === "USD" ? "USD" : "JPY",
     paid: false,
@@ -1604,11 +1704,20 @@ function buildHotelPlaceholderForArea(preferredArea: string, checkIn: string, ch
 }
 
 function buildFlightNote(flight: FlightRecommendation) {
-  const link = cleanString(flight.link);
-  if (link) {
-    return link;
+  const source = cleanString(flight.source);
+  const via = Array.isArray(flight.via)
+    ? flight.via.map((item) => cleanString(item)).filter(Boolean)
+    : [];
+  if (via.length > 0) {
+    return `経由: ${via.join(" / ")}${source ? ` / source: ${source}` : ""}`;
   }
-  return "";
+  if ((flight.stops ?? 0) === 0) {
+    return source ? `直行便 / source: ${source}` : "直行便";
+  }
+  if (typeof flight.stops === "number" && flight.stops > 0) {
+    return source ? `${flight.stops}回乗継 / source: ${source}` : `${flight.stops}回乗継`;
+  }
+  return source ? `source: ${source}` : "";
 }
 
 function mapFlightTransfers(flight: FlightRecommendation) {
@@ -1642,6 +1751,7 @@ function mapFlightCandidates(flights: FlightRecommendation[]) {
     currency: cleanString(flight.currency).toUpperCase() === "USD" ? "USD" : "JPY",
     paid: false,
     notes: buildFlightNote(flight) || undefined,
+    link: cleanString(flight.link) || undefined,
     transfers: mapFlightTransfers(flight)
   }));
 }
@@ -2215,14 +2325,21 @@ export async function POST(request: Request) {
     extractDestinationFromPrompt(prompt),
     destination
   ]);
+  const flightSearchFrom = inferFlightSearchLocation(departureCandidate);
+  const flightSearchTo = inferFlightSearchLocation(destinationCandidate || destination);
   const hasAirportSignal =
     hasAirportSignalText(destinationCandidate) || hasAirportSignalText(departureCandidate);
+  const hasDomesticLongDistanceSignal = hasLikelyDomesticLongDistanceSignal(
+    departureCandidate,
+    destinationCandidate || destination
+  );
   const shouldTryFlightSupplement =
     Boolean(destination && checkIn) &&
     (hasFlightSearchIntent(prompt) ||
       hasFlightPriorityPreference(prompt) ||
       hasAnyFlightTransport ||
       hasAirportSignal ||
+      hasDomesticLongDistanceSignal ||
       hasLikelyInternationalSignal(prompt, destination)) &&
     (!hasReliableFlightTransport || !hasApiBackedFlightTransport || flightLikeCount !== 1);
   if (shouldTryHotelSupplement && hotelSearchDestination && checkIn && checkOut) {
@@ -2265,8 +2382,8 @@ export async function POST(request: Request) {
     mergedWarnings.push(...hotelSupplement.warnings);
   }
   if (shouldTryFlightSupplement && destination && checkIn) {
-    const from = departureCandidate;
-    const to = destinationCandidate || destination;
+    const from = flightSearchFrom;
+    const to = flightSearchTo;
     if (from && to) {
       const roundTripSupplement = await fetchRoundTripFlightCandidatesFromApi({
         request,
@@ -2330,9 +2447,7 @@ export async function POST(request: Request) {
     const nextTransportRecords = nextTransportations
       .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
       .map((item) => item as Record<string, unknown>);
-    const shouldMergeTransportations =
-      nextTransportations.length === 0 ||
-      needsRoundTripTransportCoverage(nextTransportRecords, checkIn, checkOut);
+    const shouldMergeTransportations = nextTransportations.length === 0;
     const nextActivities = Array.isArray(mergedPlan.activities) ? mergedPlan.activities : [];
     const nonGenericActivities = nextActivities.filter((item) =>
       item && typeof item === "object" && !Array.isArray(item)

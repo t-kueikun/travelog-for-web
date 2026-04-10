@@ -311,6 +311,10 @@ function buildAirportQueries(value: string) {
   };
   const normalized = cleanString(value);
   push(normalized);
+  Array.from(normalized.matchAll(/[（(]([^）)]+)[）)]/g))
+    .map((match) => cleanString(match[1]))
+    .filter(Boolean)
+    .forEach(push);
   const withoutBrackets = normalized
     .replace(/[（(][^）)]*[）)]/g, " ")
     .replace(/\s+/g, " ");
@@ -331,21 +335,34 @@ function buildAirportQueries(value: string) {
 const IATA_ALIAS_MAP: Record<string, string> = {
   東京: "TYO",
   羽田: "HND",
+  羽田空港: "HND",
   成田: "NRT",
+  成田空港: "NRT",
+  成田国際空港: "NRT",
   大阪: "OSA",
   伊丹: "ITM",
+  伊丹空港: "ITM",
+  大阪国際空港: "ITM",
   関西: "KIX",
+  関西空港: "KIX",
+  関西国際空港: "KIX",
   福岡: "FUK",
+  福岡空港: "FUK",
   博多: "FUK",
   札幌: "CTS",
   新千歳: "CTS",
+  新千歳空港: "CTS",
   那覇: "OKA",
   沖縄: "OKA",
   台北: "TPE",
   桃園: "TPE",
+  桃園空港: "TPE",
   松山: "TSA",
+  松山空港: "TSA",
   ソウル: "SEL",
   仁川: "ICN",
+  仁川空港: "ICN",
+  仁川国際空港: "ICN",
   金浦: "GMP",
   釜山: "PUS",
   香港: "HKG",
@@ -353,6 +370,11 @@ const IATA_ALIAS_MAP: Record<string, string> = {
   シンガポール: "SIN",
   パリ: "PAR",
   ロンドン: "LON",
+  ローマ: "FCO",
+  フィウミチーノ: "FCO",
+  フィウミチーノ空港: "FCO",
+  ローマフィウミチーノ空港: "FCO",
+  レオナルドダヴィンチ国際空港: "FCO",
   ニューヨーク: "NYC",
   ロサンゼルス: "LAX",
   オークランド: "AKL",

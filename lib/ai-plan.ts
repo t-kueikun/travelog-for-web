@@ -311,6 +311,7 @@ function cleanTransportation(value: unknown) {
   const price = cleanNumber(source.price ?? source.amount ?? source.cost ?? source.fare);
   const paid = cleanBoolean(source.paid ?? source.isPaid);
   const notes = cleanString(source.notes ?? source.memo ?? source.detail);
+  const link = cleanLink(source.link ?? source.url);
   const mode = inferTransportModeFromSource({
     rawMode: modeRaw,
     from,
@@ -358,6 +359,9 @@ function cleanTransportation(value: unknown) {
   if (notes) {
     next.notes = notes;
   }
+  if (link) {
+    next.link = link;
+  }
   if (transfers.length > 0) {
     next.transfers = transfers;
   }
@@ -374,6 +378,7 @@ function cleanHotel(value: unknown) {
   const name = cleanString(source.name ?? source.title);
   const price = cleanNumber(source.price ?? source.amount ?? source.cost);
   const paid = cleanBoolean(source.paid ?? source.isPaid);
+  const address = cleanString(source.address ?? source.placeName ?? source.formattedAddress);
   const checkIn = cleanDate(source.checkIn ?? source.checkInDate ?? source.startDate);
   const checkOut = cleanDate(source.checkOut ?? source.checkOutDate ?? source.endDate);
   const notes = cleanString(source.notes ?? source.memo ?? source.detail);
@@ -388,6 +393,9 @@ function cleanHotel(value: unknown) {
   next.currency = cleanCurrency(source.currency ?? source.currencyCode);
   if (paid !== undefined) {
     next.paid = paid;
+  }
+  if (address) {
+    next.address = address;
   }
   if (checkIn) {
     next.checkIn = checkIn;
@@ -412,12 +420,16 @@ function cleanActivity(value: unknown) {
   }
   const next: Record<string, unknown> = {};
   const title = cleanString(source.title ?? source.name);
+  const address = cleanString(source.address ?? source.placeName ?? source.formattedAddress);
   const date = cleanDate(source.date ?? source.startDate ?? source.time);
   const notes = cleanString(source.notes ?? source.memo ?? source.detail);
   const link = cleanLink(source.link ?? source.url);
 
   if (title) {
     next.title = title;
+  }
+  if (address) {
+    next.address = address;
   }
   if (date) {
     next.date = date;

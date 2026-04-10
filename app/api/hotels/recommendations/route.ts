@@ -70,6 +70,17 @@ function cleanString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function sanitizeHotelAddress(value: unknown) {
+  const text = cleanString(value);
+  if (!text) {
+    return "";
+  }
+  if (/^(hotel|hotels|vacation rental|hostel|apartment|apartments|guest house|guesthouse)$/i.test(text)) {
+    return "";
+  }
+  return text;
+}
+
 function parseNumber(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -123,8 +134,20 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function buildCacheKey(destination: string, currency: string) {
-  return `${cleanString(destination).toLowerCase()}|${currency.toUpperCase()}`;
+function buildCacheKey(
+  destination: string,
+  currency: string,
+  checkIn: string,
+  checkOut: string,
+  adults: number
+) {
+  return [
+    cleanString(destination).toLowerCase(),
+    currency.toUpperCase(),
+    cleanString(checkIn),
+    cleanString(checkOut),
+    String(adults)
+  ].join("|");
 }
 
 function getCachedRecommendations(cacheKey: string) {
@@ -227,6 +250,34 @@ function buildSerpHotelSearchUrl({
   url.searchParams.set("gl", gl);
   url.searchParams.set("no_cache", SERPAPI_NO_CACHE ? "true" : "false");
   return url;
+}
+
+function buildPublicGoogleHotelsUrl({
+  query,
+  checkIn,
+  checkOut,
+  adults,
+  currency,
+  locale,
+  gl
+}: {
+  query: string;
+  checkIn: string;
+  checkOut: string;
+  adults: number;
+  currency: string;
+  locale: string;
+  gl: string;
+}) {
+  const url = new URL("https://www.google.com/travel/hotels");
+  url.searchParams.set("q", query);
+  url.searchParams.set("check_in_date", checkIn);
+  url.searchParams.set("check_out_date", checkOut);
+  url.searchParams.set("adults", String(adults));
+  url.searchParams.set("hl", locale === "ja" ? "ja" : "en");
+  url.searchParams.set("gl", gl);
+  url.searchParams.set("curr", currency.toUpperCase());
+  return url.toString();
 }
 
 function buildDestinationQueries(destination: string) {
@@ -741,6 +792,33 @@ function extractSerpPropertyObjects(payload: unknown) {
 
 const BLOCKED_HOTEL_LINK_HOSTS = ["bluepillow.com", "vrbo.com"];
 
+function isInternalGoogleTravelUrl(value: string) {
+  return /\/_\/TravelFrontendUi\/data\/batchexecute/i.test(value);
+}
+
+function sanitizePublicGoogleHotelsLink(link: string) {
+  const normalized = cleanString(link);
+  if (!normalized) {
+    return "";
+  }
+  try {
+    const url = new URL(normalized);
+    const hostname = url.hostname.toLowerCase();
+    if (!(hostname === "www.google.com" || hostname.endsWith(".google.com"))) {
+      return "";
+    }
+    if (isInternalGoogleTravelUrl(normalized)) {
+      return "";
+    }
+    if (!/\/travel\/hotels/i.test(url.pathname) && !/\/travel\/search/i.test(url.pathname)) {
+      return "";
+    }
+    return normalized;
+  } catch {
+    return "";
+  }
+}
+
 function isAllowedSerpHotelType(value: unknown) {
   const normalized = cleanString(value).toLowerCase();
   if (!normalized) {
@@ -771,9 +849,47 @@ function sanitizeSerpHotelLink(link: string, fallbackLink: string) {
   return normalized;
 }
 
-function extractSerpHotelRecommendations(payload: unknown, limit: number) {
+function preferGoogleHotelsLink(payloadLink: string, providerLink: string, fallbackLink: string) {
+  const primary = sanitizePublicGoogleHotelsLink(payloadLink) || sanitizePublicGoogleHotelsLink(fallbackLink);
+  if (primary) {
+    return primary;
+  }
+  return sanitizeSerpHotelLink(providerLink, fallbackLink);
+}
+
+function extractSerpHotelRecommendations(
+  payload: unknown,
+  limit: number,
+  {
+    query,
+    checkIn,
+    checkOut,
+    adults,
+    currency,
+    locale,
+    gl
+  }: {
+    query: string;
+    checkIn: string;
+    checkOut: string;
+    adults: number;
+    currency: string;
+    locale: string;
+    gl: string;
+  }
+) {
   const properties = extractSerpPropertyObjects(payload);
-  const fallbackLink = rootSearchUrlFromPayload(payload);
+  const fallbackLink =
+    rootSearchUrlFromPayload(payload) ||
+    buildPublicGoogleHotelsUrl({
+      query,
+      checkIn,
+      checkOut,
+      adults,
+      currency,
+      locale,
+      gl
+    });
   const hotels = properties
     .map((property): HotelRecommendation | null => {
       const name = cleanString(property.name);
@@ -812,21 +928,22 @@ function extractSerpHotelRecommendations(payload: unknown, limit: number) {
         parseNumber(property.extracted_total_reviews) ??
         parseNumber(property.total_reviews);
       const addressParts = [
-        cleanString(property.address),
-        cleanString(property.neighborhood),
-        cleanString(property.type),
-        cleanString(property.description)
+        sanitizeHotelAddress(property.address),
+        sanitizeHotelAddress(property.neighborhood)
       ].filter(Boolean);
-      const address = addressParts.length > 0 ? addressParts[0] : null;
-      const link = sanitizeSerpHotelLink(
-        cleanString(property.link),
-        cleanString(
-          fallbackLink ||
-            (gps?.latitude && gps?.longitude
-              ? `https://www.google.com/travel/hotels?q=${encodeURIComponent(name)}`
-              : "")
-        )
-      ) || null;
+      const address = addressParts.length > 0 ? addressParts.join(", ") : null;
+      const googleHotelsLink = cleanString(
+        fallbackLink ||
+          (gps?.latitude && gps?.longitude
+            ? `https://www.google.com/travel/hotels?q=${encodeURIComponent(name)}`
+            : "")
+      );
+      const link =
+        preferGoogleHotelsLink(
+          cleanString(property.google_hotels_url ?? property.googleHotelsUrl),
+          cleanString(property.link),
+          googleHotelsLink
+        ) || null;
 
       return {
         name,
@@ -861,7 +978,7 @@ function rootSearchUrlFromPayload(payload: unknown) {
     root.search_metadata && typeof root.search_metadata === "object"
       ? (root.search_metadata as Record<string, unknown>)
       : null;
-  return cleanString(metadata?.google_hotels_url);
+  return sanitizePublicGoogleHotelsLink(cleanString(metadata?.google_hotels_url));
 }
 
 function extractHotelRecommendations(payload: unknown, limit: number) {
@@ -933,9 +1050,9 @@ function extractHotelRecommendations(payload: unknown, limit: number) {
     }
 
     const addressParts = [
-      cleanString(record.address),
-      cleanString(record.city),
-      cleanString(record.country_trans ?? record.country)
+      sanitizeHotelAddress(record.address),
+      sanitizeHotelAddress(record.city),
+      sanitizeHotelAddress(record.country_trans ?? record.country)
     ].filter(Boolean);
     const address = addressParts.length > 0 ? addressParts.join(", ") : null;
     const link =
@@ -988,7 +1105,6 @@ export async function POST(request: Request) {
   const currency = (cleanString(body.currency) || DEFAULT_CURRENCY).toUpperCase();
   const adults = Math.max(1, Math.min(8, Math.floor(body.adults ?? 2)));
   const limit = Math.max(1, Math.min(10, Math.floor(body.limit ?? 5)));
-  const cacheKey = buildCacheKey(destination, currency);
   const gl = DEFAULT_GL;
 
   if (!destination) {
@@ -997,6 +1113,7 @@ export async function POST(request: Request) {
   if (!checkIn || !checkOut || !isValidDate(checkIn) || !isValidDate(checkOut)) {
     return NextResponse.json({ error: "invalid_dates" }, { status: 400 });
   }
+  const cacheKey = buildCacheKey(destination, currency, checkIn, checkOut, adults);
 
   let serpFailure: UpstreamResult | null = null;
   for (const query of buildDestinationQueries(destination)) {
@@ -1015,17 +1132,26 @@ export async function POST(request: Request) {
       serpFailure = result;
       continue;
     }
-    const hotels = extractSerpHotelRecommendations(result.payload, limit);
-    if (hotels.length > 0) {
+    const hotels = extractSerpHotelRecommendations(result.payload, limit, {
+      query,
+      checkIn,
+      checkOut,
+      adults,
+      currency,
+      locale,
+      gl
+    });
+    const filteredHotels = filterHotelsByDestination(hotels, destination, query);
+    if (filteredHotels.length > 0) {
       const destinationResolved = {
         destId: query,
         name: query,
         type: "CITY"
       };
-      setCachedRecommendations(cacheKey, destinationResolved, hotels);
+      setCachedRecommendations(cacheKey, destinationResolved, filteredHotels);
       return NextResponse.json({
         destinationResolved,
-        hotels,
+        hotels: filteredHotels,
         warnings: []
       });
     }

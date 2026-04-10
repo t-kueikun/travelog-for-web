@@ -13,6 +13,7 @@ import type { User } from "firebase/auth";
 import { useParams, useSearchParams } from "next/navigation";
 import AuthGate from "@/components/AuthGate";
 import PageShell from "@/components/PageShell";
+import dynamic from "next/dynamic";
 import {
   addMonths,
   differenceInCalendarDays,
@@ -39,6 +40,13 @@ import {
   type TravelPlan
 } from "@/lib/firestore";
 import { formatDate, formatDateTime, formatYen } from "@/lib/format";
+
+const TripOverviewMapCanvas = dynamic(
+  () => import("@/components/TripOverviewMapCanvas"),
+  {
+    ssr: false
+  }
+);
 
 function getPlanProgress(plan: TravelPlan) {
   if (typeof plan.totalCost !== "number") {
@@ -106,12 +114,14 @@ type TransportationDraft = {
   currency: FieldDraft;
   paid: BooleanDraft;
   notes: FieldDraft;
+  link: FieldDraft;
   transfers: TransferDraft[];
 };
 
 type HotelDraft = {
   raw: ItemRecord;
   name: FieldDraft;
+  address: FieldDraft;
   price: NumberDraft;
   currency: FieldDraft;
   paid: BooleanDraft;
@@ -124,6 +134,7 @@ type HotelDraft = {
 type ActivityDraft = {
   raw: ItemRecord;
   title: FieldDraft;
+  address: FieldDraft;
   date: FieldDraft;
   notes: FieldDraft;
   link: FieldDraft;
@@ -204,8 +215,10 @@ type AiChatMessage = {
 type TripMapStop = {
   id: string;
   label: string;
+  address: string;
   query: string;
   queryCandidates: string[];
+  destinationHint: string;
   kind: "宿泊" | "予定" | "移動";
   sortValue: string;
   subtitle: string;
@@ -441,12 +454,14 @@ const HOTEL_PAID_KEYS = [
   "paymentDone",
   "isSettled"
 ];
+const HOTEL_ADDRESS_KEYS = ["address", "placeName", "formattedAddress"];
 const HOTEL_CHECKIN_KEYS = ["checkIn", "checkInDate", "startDate"];
 const HOTEL_CHECKOUT_KEYS = ["checkOut", "checkOutDate", "endDate"];
 
 const USD_TO_JPY_RATE = 150;
 
 const ACTIVITY_TITLE_KEYS = ["name", "title", "activity"];
+const ACTIVITY_ADDRESS_KEYS = ["address", "placeName", "formattedAddress"];
 const ACTIVITY_DATE_KEYS = ["date", "startDate", "time"];
 const ACTIVITY_COST_KEYS = ["price", "amount", "cost", "fee", "fare", "total"];
 
@@ -1346,6 +1361,30 @@ function buildStringDraft(
   return { key, value, original: value };
 }
 
+function sanitizeGenericAddress(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (/^(hotel|hotels|vacation rental|hostel|apartment|apartments|guest house|guesthouse)$/i.test(trimmed)) {
+    return "";
+  }
+  return trimmed;
+}
+
+function extractStandaloneUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const direct = normalizeLink(trimmed);
+  if (direct) {
+    return direct;
+  }
+  const match = trimmed.match(/https?:\/\/[^\s]+/i);
+  return match ? normalizeLink(match[0]) : "";
+}
+
 function hasAirportSignal(value: string) {
   const normalized = value.trim().toLowerCase();
   if (!normalized) {
@@ -1570,6 +1609,14 @@ function buildTransportationDrafts(items: ItemRecord[]) {
     const seatKeys = config.seatKeys ?? [];
     const transfers = Array.isArray(item.transfers) ? item.transfers : [];
     const currency = buildCurrencyDraft(item, TRANSPORT_CURRENCY_KEYS);
+    const notesDraft = buildStringDraft(item, NOTES_KEYS);
+    const linkDraft = buildStringDraft(item, LINK_KEYS);
+    const noteOnlyLink = extractStandaloneUrl(notesDraft.value);
+    const effectiveLink = linkDraft.value || noteOnlyLink || "";
+    const effectiveNotes =
+      noteOnlyLink && normalizeLink(notesDraft.value) === noteOnlyLink
+        ? { ...notesDraft, value: "", original: "" }
+        : notesDraft;
     return {
       raw: item,
       id,
@@ -1593,7 +1640,8 @@ function buildTransportationDrafts(items: ItemRecord[]) {
       ),
       currency,
       paid: buildBooleanDraft(item, TRANSPORT_PAID_KEYS),
-      notes: buildStringDraft(item, NOTES_KEYS),
+      notes: effectiveNotes,
+      link: { ...linkDraft, value: effectiveLink, original: effectiveLink || linkDraft.original },
       transfers: buildTransferDrafts(transfers as ItemRecord[])
     } satisfies TransportationDraft;
   });
@@ -1603,9 +1651,16 @@ function buildHotelDrafts(items: ItemRecord[]) {
   return items.map((raw) => {
     const item = raw && typeof raw === "object" ? raw : {};
     const currency = buildCurrencyDraft(item, HOTEL_CURRENCY_KEYS);
+    const addressDraft = buildStringDraft(item, HOTEL_ADDRESS_KEYS);
+    const sanitizedAddress = sanitizeGenericAddress(addressDraft.value);
     return {
       raw: item,
       name: buildStringDraft(item, HOTEL_NAME_KEYS),
+      address: {
+        ...addressDraft,
+        value: sanitizedAddress,
+        original: sanitizedAddress
+      },
       price: buildPriceDraft(
         item,
         HOTEL_PRICE_KEYS,
@@ -1628,6 +1683,7 @@ function buildActivityDrafts(items: ItemRecord[]) {
     return {
       raw: item,
       title: buildStringDraft(item, ACTIVITY_TITLE_KEYS),
+      address: buildStringDraft(item, ACTIVITY_ADDRESS_KEYS),
       date: buildDateDraft(item, ACTIVITY_DATE_KEYS),
       notes: buildStringDraft(item, NOTES_KEYS),
       link: buildStringDraft(item, LINK_KEYS)
@@ -1757,6 +1813,7 @@ function applyTransportationDrafts(drafts: TransportationDraft[]) {
     applyStringDraft(nextItem, draft.currency);
     applyBooleanDraft(nextItem, draft.paid);
     applyStringDraft(nextItem, draft.notes);
+    applyStringDraft(nextItem, draft.link);
     if (supportsTransferInput(draft.mode.value) || Array.isArray(draft.raw.transfers)) {
       nextItem.transfers = applyTransferDrafts(draft.transfers);
     }
@@ -1768,6 +1825,7 @@ function applyHotelDrafts(drafts: HotelDraft[]) {
   return drafts.map((draft) => {
     const nextItem: ItemRecord = { ...draft.raw };
     applyStringDraft(nextItem, draft.name);
+    applyStringDraft(nextItem, draft.address);
     applyPriceDraft(
       nextItem,
       draft.price,
@@ -1788,6 +1846,7 @@ function applyActivityDrafts(drafts: ActivityDraft[]) {
   return drafts.map((draft) => {
     const nextItem: ItemRecord = { ...draft.raw };
     applyStringDraft(nextItem, draft.title);
+    applyStringDraft(nextItem, draft.address);
     applyStringDraft(nextItem, draft.date);
     applyStringDraft(nextItem, draft.notes);
     applyStringDraft(nextItem, draft.link);
@@ -2546,12 +2605,17 @@ function buildMapQuery(parts: Array<string | null | undefined>) {
   return Array.from(new Set(normalized)).join(", ");
 }
 
-function buildHotelMapQuery(name: string, notes: string, destination: string) {
-  return buildMapQuery([name, extractMapHint(notes), destination]);
+function buildHotelMapQuery(name: string, address: string, notes: string, destination: string) {
+  return buildMapQuery([address, name, extractMapHint(notes), destination]);
 }
 
-function buildActivityMapQuery(title: string, notes: string, destination: string) {
-  return buildMapQuery([title, extractMapHint(notes), destination]);
+function buildActivityMapQuery(
+  title: string,
+  address: string,
+  notes: string,
+  destination: string
+) {
+  return buildMapQuery([address, title, extractMapHint(notes), destination]);
 }
 
 function stripIataSuffix(value: string) {
@@ -2576,8 +2640,10 @@ const AIRPORT_CODE_ALIASES: Record<string, string[]> = {
 const DESTINATION_GEO_ALIASES: Record<string, string[]> = {
   バンコク: ["バンコク", "Bangkok", "タイ", "Thailand"],
   Bangkok: ["バンコク", "Bangkok", "タイ", "Thailand"],
-  台北: ["台北", "Taipei", "台湾", "Taiwan"],
-  Taipei: ["台北", "Taipei", "台湾", "Taiwan"],
+  台北: ["台北", "Taipei", "新北", "New Taipei", "台湾", "Taiwan"],
+  Taipei: ["台北", "Taipei", "新北", "New Taipei", "台湾", "Taiwan"],
+  台湾: ["台湾", "Taiwan", "台北", "Taipei", "新北", "New Taipei"],
+  Taiwan: ["台湾", "Taiwan", "台北", "Taipei", "新北", "New Taipei"],
   ソウル: ["ソウル", "Seoul", "韓国", "Korea"],
   Seoul: ["ソウル", "Seoul", "韓国", "Korea"],
   香港: ["香港", "Hong Kong"],
@@ -2628,22 +2694,35 @@ function isJapanDestination(destinationHints: string[]) {
 }
 
 function extractPlaceFragments(value: string) {
-  const normalized = compactText(stripIataSuffix(value))
+  const base = compactText(stripIataSuffix(value));
+  const parenthetical = Array.from(base.matchAll(/[（(]([^）)]+)[）)]/g))
+    .map((match) => compactText(match[1] ?? ""))
+    .filter(Boolean);
+  const normalized = base
+    .replace(/[（(][^）)]*[）)]/g, " ")
     .replace(/[()（）]/g, " ")
     .replace(
-      /(観光|散策|体験|食べ歩き|味くらべ|グルメ|ランチ|ディナー|朝食|巡り|要確認|おすすめ|人気|本店)/g,
+      /(観光|旅行|散策|体験|食べ歩き|味くらべ|グルメ|ランチ|ディナー|朝食|巡り|周辺|歴史|街歩き|写真撮影|展望台|要確認|おすすめ|人気|など|本店|ツアー)/g,
       " "
     );
+  const directCore = compactText(
+    normalized
+      .replace(/\s+/g, " ")
+      .trim()
+  );
   return Array.from(
     new Set(
-      normalized
-        .split(/[&＆、,\/／]+/)
+      [directCore, normalized, ...parenthetical]
+        .flatMap((chunk) => chunk.split(/[&＆、,\/／]+/))
         .flatMap((part) => part.split(/・/))
+        .flatMap((part) => part.split(/\s+/))
         .map((part) => compactText(part))
         .filter((part) => part.length >= 2)
         .filter(
           (part) =>
-            !/^(和菓子|グルメ|観光|散策|体験|食べ歩き|ランチ|ディナー|朝食)$/.test(part)
+            !/^(和菓子|グルメ|観光|散策|体験|食べ歩き|ランチ|ディナー|朝食|周辺|歴史|街歩き|写真撮影|展望台|など)$/.test(
+              part
+            )
         )
     )
   ).slice(0, 4);
@@ -2673,13 +2752,35 @@ function buildQueryCandidates(partsList: Array<Array<string | null | undefined>>
   return Array.from(new Set(candidates));
 }
 
-function buildHotelMapQueryCandidates(name: string, notes: string, destination: string) {
+function getPrimaryDestinationTerms(destination: string) {
+  return splitDestinationHints(destination).filter(
+    (hint) => !/^(日本|japan|台湾|taiwan|タイ|thailand|韓国|korea|香港|hong kong)$/i.test(hint)
+  );
+}
+
+function buildHotelMapQueryCandidates(
+  name: string,
+  address: string,
+  notes: string,
+  destination: string
+) {
   const hint = extractMapHint(notes);
   const baseName = stripIataSuffix(name);
+  const cleanAddress = compactText(address);
   const destinationHints = splitDestinationHints(destination);
-  const placeFragments = extractPlaceFragments(`${name} ${hint}`);
+  const primaryDestinationTerms = getPrimaryDestinationTerms(destination);
+  const placeFragments = extractPlaceFragments(`${name} ${cleanAddress} ${hint}`);
   const appendJapanSuffix = isJapanDestination(destinationHints);
   return buildQueryCandidates([
+    cleanAddress ? [cleanAddress] : [],
+    ...destinationHints.map((destinationHint) =>
+      cleanAddress ? [cleanAddress, destinationHint] : []
+    ),
+    ...primaryDestinationTerms.map((destinationHint) =>
+      containsJapaneseText(baseName) && appendJapanSuffix
+        ? [baseName, destinationHint, "日本"]
+        : [baseName, destinationHint]
+    ),
     ...destinationHints.map((destinationHint) =>
       containsJapaneseText(baseName) && appendJapanSuffix
         ? [baseName, destinationHint, "日本"]
@@ -2700,14 +2801,30 @@ function buildHotelMapQueryCandidates(name: string, notes: string, destination: 
   ]);
 }
 
-function buildActivityMapQueryCandidates(title: string, notes: string, destination: string) {
+function buildActivityMapQueryCandidates(
+  title: string,
+  address: string,
+  notes: string,
+  destination: string
+) {
   const hint = extractMapHint(notes);
   const baseTitle = stripIataSuffix(title);
+  const cleanAddress = compactText(address);
   const destinationHints = splitDestinationHints(destination);
-  const placeFragments = extractPlaceFragments(`${title} ${hint}`);
+  const primaryDestinationTerms = getPrimaryDestinationTerms(destination);
+  const placeFragments = extractPlaceFragments(`${title} ${cleanAddress} ${hint}`);
   const appendJapanSuffix = isJapanDestination(destinationHints);
   return buildQueryCandidates([
+    cleanAddress ? [cleanAddress] : [],
     ...destinationHints.map((destinationHint) =>
+      cleanAddress ? [cleanAddress, destinationHint] : []
+    ),
+    ...placeFragments.flatMap((fragment) =>
+      primaryDestinationTerms.map((destinationHint) =>
+        appendJapanSuffix ? [fragment, destinationHint, "日本"] : [fragment, destinationHint]
+      )
+    ),
+    ...primaryDestinationTerms.map((destinationHint) =>
       containsJapaneseText(baseTitle) && appendJapanSuffix
         ? [baseTitle, destinationHint, "日本"]
         : [baseTitle, destinationHint]
@@ -2717,11 +2834,16 @@ function buildActivityMapQueryCandidates(title: string, notes: string, destinati
         appendJapanSuffix ? [fragment, destinationHint, "日本"] : [fragment, destinationHint]
       )
     ),
+    ...destinationHints.map((destinationHint) =>
+      containsJapaneseText(baseTitle) && appendJapanSuffix
+        ? [baseTitle, destinationHint, "日本"]
+        : [baseTitle, destinationHint]
+    ),
     containsJapaneseText(baseTitle) && appendJapanSuffix ? [baseTitle, "日本"] : [],
     ...(appendJapanSuffix ? placeFragments.map((fragment) => [fragment, "日本"]) : []),
+    ...destinationHints.map((destinationHint) => [hint, destinationHint]),
     [baseTitle],
     [hint],
-    ...destinationHints.map((destinationHint) => [hint, destinationHint]),
     ...placeFragments.map((fragment) => [fragment]),
     [title]
   ]);
@@ -2789,6 +2911,7 @@ function buildTripMapStopsFromHotels(
   hotels: Array<{
     id: string;
     name: string;
+    address: string;
     notes: string;
     checkIn: string;
     checkOut: string;
@@ -2800,6 +2923,7 @@ function buildTripMapStopsFromHotels(
       const label = compactText(hotel.name);
       const queryCandidates = buildHotelMapQueryCandidates(
         label,
+        hotel.address,
         hotel.notes,
         destination
       );
@@ -2814,8 +2938,10 @@ function buildTripMapStopsFromHotels(
       return {
         id: hotel.id,
         label,
+        address: compactText(hotel.address),
         query,
         queryCandidates,
+        destinationHint: destination,
         kind: "宿泊" as const,
         sortValue: normalizeTripMapSortValue(hotel.checkIn || hotel.checkOut),
         subtitle
@@ -2828,6 +2954,7 @@ function buildTripMapStopsFromActivities(
   activities: Array<{
     id: string;
     title: string;
+    address: string;
     notes: string;
     date: string;
   }>,
@@ -2838,6 +2965,7 @@ function buildTripMapStopsFromActivities(
       const label = compactText(activity.title);
       const queryCandidates = buildActivityMapQueryCandidates(
         label,
+        activity.address,
         activity.notes,
         destination
       );
@@ -2848,8 +2976,10 @@ function buildTripMapStopsFromActivities(
       return {
         id: activity.id,
         label,
+        address: compactText(activity.address),
         query,
         queryCandidates,
+        destinationHint: destination,
         kind: "予定" as const,
         sortValue: normalizeTripMapSortValue(activity.date),
         subtitle: activity.date ? formatShortDateTime(activity.date) : "予定"
@@ -2882,8 +3012,10 @@ function buildTripMapStopsFromTransportations(
         stops.push({
           id: `${transportation.id}-from`,
           label: departure,
+          address: "",
           query: stripIataSuffix(departure),
           queryCandidates: buildLocationQueryCandidates(departure, destinationHint),
+          destinationHint,
           kind: "移動",
           sortValue: normalizeTripMapSortValue(depTime),
           subtitle: `${mode} 出発${depTime ? ` ${formatShortDateTime(depTime)}` : ""}`
@@ -2894,8 +3026,10 @@ function buildTripMapStopsFromTransportations(
         stops.push({
           id: `${transportation.id}-to`,
           label: arrival,
+          address: "",
           query: stripIataSuffix(arrival),
           queryCandidates: buildLocationQueryCandidates(arrival, destinationHint),
+          destinationHint,
           kind: "移動",
           sortValue: normalizeTripMapSortValue(arrTime || depTime),
           subtitle: `${mode} 到着${arrTime ? ` ${formatShortDateTime(arrTime)}` : ""}`
@@ -2908,11 +3042,12 @@ function buildTripMapStopsFromTransportations(
 }
 
 function TripOverviewMapCard({
-  stops
+  stops,
+  onResolvedStops
 }: {
   stops: TripMapStop[];
+  onResolvedStops?: (stops: TripMapResolvedStop[]) => void;
 }) {
-  const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const [resolvedStops, setResolvedStops] = useState<TripMapResolvedStop[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -2924,8 +3059,10 @@ function TripOverviewMapCard({
       stops.map((stop) => ({
         id: stop.id,
         label: stop.label,
+        address: stop.address,
         query: stop.query,
         queryCandidates: stop.queryCandidates,
+        destinationHint: stop.destinationHint,
         kind: stop.kind,
         sortValue: stop.sortValue,
         subtitle: stop.subtitle
@@ -2993,103 +3130,8 @@ function TripOverviewMapCard({
   }, [stopsPayload]);
 
   useEffect(() => {
-    if (!mapContainerRef.current || resolvedStops.length === 0) {
-      return;
-    }
-
-    let disposed = false;
-    let cleanup = () => {};
-
-    void import("maplibre-gl").then((module) => {
-      if (disposed || !mapContainerRef.current) {
-        return;
-      }
-
-      const maplibregl = module.default ?? module;
-      if (!maplibregl?.Map) {
-        setError("地図ライブラリの読み込みに失敗しました。");
-        return;
-      }
-      const map = new maplibregl.Map({
-        container: mapContainerRef.current,
-        style: "https://tiles.openfreemap.org/styles/liberty",
-        center: [resolvedStops[0].lng, resolvedStops[0].lat],
-        zoom: resolvedStops.length > 1 ? 9 : 12,
-        attributionControl: false
-      });
-
-      map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
-      map.addControl(
-        new maplibregl.AttributionControl({
-          compact: true
-        })
-      );
-
-      map.on("load", () => {
-        if (resolvedStops.length > 1) {
-          map.addSource("trip-route", {
-            type: "geojson",
-            data: {
-              type: "Feature",
-              geometry: {
-                type: "LineString",
-                coordinates: resolvedStops.map((stop) => [stop.lng, stop.lat])
-              },
-              properties: {}
-            }
-          });
-
-          map.addLayer({
-            id: "trip-route-line",
-            type: "line",
-            source: "trip-route",
-            paint: {
-              "line-color": "#0f172a",
-              "line-opacity": 0.65,
-              "line-width": 3
-            }
-          });
-        }
-
-        const bounds = new maplibregl.LngLatBounds();
-        resolvedStops.forEach((stop, index) => {
-          const markerElement = document.createElement("div");
-          markerElement.className =
-            "flex h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-slate-900 text-xs font-semibold text-white shadow-lg";
-          markerElement.textContent = String(index + 1);
-          new maplibregl.Marker({ element: markerElement })
-            .setLngLat([stop.lng, stop.lat])
-            .setPopup(
-              new maplibregl.Popup({ offset: 16 }).setHTML(
-                `<div style="min-width:180px"><strong>${stop.label}</strong><br/><span style="color:#64748b">${stop.subtitle}</span><br/><span style="color:#64748b">${stop.placeName}</span></div>`
-              )
-            )
-            .addTo(map);
-          bounds.extend([stop.lng, stop.lat]);
-        });
-
-        if (resolvedStops.length > 1) {
-          map.fitBounds(bounds, {
-            padding: 48,
-            maxZoom: 13
-          });
-        }
-      });
-
-      cleanup = () => {
-        map.remove();
-      };
-    }).catch(() => {
-      if (!disposed) {
-        setError("地図ライブラリの読み込みに失敗しました。");
-      }
-    });
-
-    return () => {
-      disposed = true;
-      cleanup();
-    };
-  }, [resolvedStops]);
+    onResolvedStops?.(resolvedStops);
+  }, [onResolvedStops, resolvedStops]);
 
   if (stops.length === 0) {
     return null;
@@ -3126,7 +3168,7 @@ function TripOverviewMapCard({
             地図化できるスポットがありません。位置検索キー未設定の場合は `.env.local` に `GEOAPIFY_API_KEY` を追加してください。
           </div>
         ) : (
-          <div ref={mapContainerRef} className="h-[320px] w-full" />
+          <TripOverviewMapCanvas resolvedStops={resolvedStops} />
         )}
       </div>
 
@@ -3527,7 +3569,6 @@ function PlanDetailContent({ user }: { user: User }) {
   ) =>
     recommendations.map((hotel) => {
       const noteParts = [
-        hotel.address ?? "",
         hotel.score !== null
           ? `レビュー ${hotel.score.toFixed(1)}${hotel.reviewCount !== null ? ` (${Math.round(hotel.reviewCount)}件)` : ""}`
           : "",
@@ -3536,6 +3577,7 @@ function PlanDetailContent({ user }: { user: User }) {
 
       return {
         name: hotel.name,
+        address: hotel.address ?? "",
         price: hotel.price,
         currency: normalizePriceCurrency(hotel.currency ?? "JPY"),
         paid: false,
@@ -4444,7 +4486,8 @@ function PlanDetailContent({ user }: { user: User }) {
         [base?.price.key || TRANSPORT_PRICE_KEYS[0]]: null,
         [currencyKey]: currencyValue,
         [base?.paid.key || TRANSPORT_PAID_KEYS[0]]: false,
-        [base?.notes.key || NOTES_KEYS[0]]: ""
+        [base?.notes.key || NOTES_KEYS[0]]: "",
+        [base?.link.key || LINK_KEYS[0]]: ""
       };
       if (serviceKey) {
         item[serviceKey] = "";
@@ -4466,6 +4509,7 @@ function PlanDetailContent({ user }: { user: User }) {
       const currencyValue = normalizePriceCurrency(base?.currency.value ?? "JPY");
       const item: ItemRecord = {
         [base?.name.key || HOTEL_NAME_KEYS[0]]: "",
+        [base?.address.key || HOTEL_ADDRESS_KEYS[0]]: "",
         [base?.price.key || HOTEL_PRICE_KEYS[0]]: null,
         [currencyKey]: currencyValue,
         [base?.paid.key || HOTEL_PAID_KEYS[0]]: false,
@@ -4483,6 +4527,7 @@ function PlanDetailContent({ user }: { user: User }) {
       const base = prev[0];
       const item: ItemRecord = {
         [base?.title.key || ACTIVITY_TITLE_KEYS[0]]: "",
+        [base?.address.key || ACTIVITY_ADDRESS_KEYS[0]]: "",
         [base?.date.key || ACTIVITY_DATE_KEYS[0]]: "",
         [base?.notes.key || NOTES_KEYS[0]]: "",
         [base?.link.key || LINK_KEYS[0]]: ""
@@ -4823,12 +4868,13 @@ function PlanDetailContent({ user }: { user: User }) {
 
     const hotelStops = canEdit
       ? buildTripMapStopsFromHotels(
-          hotelEdits.map((draft, index) => ({
+        hotelEdits.map((draft, index) => ({
             id:
               typeof draft.raw.id === "string" || typeof draft.raw.id === "number"
                 ? String(draft.raw.id)
                 : `hotel-draft-${index}`,
             name: draft.name.value,
+            address: draft.address.value,
             notes: draft.notes.value,
             checkIn: draft.checkIn.value,
             checkOut: draft.checkOut.value
@@ -4836,9 +4882,10 @@ function PlanDetailContent({ user }: { user: User }) {
           mapDestinationHint
         )
       : buildTripMapStopsFromHotels(
-          hotels.map((item, index) => ({
+        hotels.map((item, index) => ({
             id: getStringField(item, ["id"]) || `hotel-${index}`,
             name: getStringField(item, HOTEL_NAME_KEYS) || "",
+            address: getStringField(item, HOTEL_ADDRESS_KEYS) || "",
             notes: getStringField(item, NOTES_KEYS) || "",
             checkIn: formatDateTime(getDateField(item, HOTEL_CHECKIN_KEYS)) || "",
             checkOut: formatDateTime(getDateField(item, HOTEL_CHECKOUT_KEYS)) || ""
@@ -4848,21 +4895,23 @@ function PlanDetailContent({ user }: { user: User }) {
 
     const activityStops = canEdit
       ? buildTripMapStopsFromActivities(
-          activityEdits.map((draft, index) => ({
+        activityEdits.map((draft, index) => ({
             id:
               typeof draft.raw.id === "string" || typeof draft.raw.id === "number"
                 ? String(draft.raw.id)
                 : `activity-draft-${index}`,
             title: draft.title.value,
+            address: draft.address.value,
             notes: draft.notes.value,
             date: draft.date.value
           })),
           mapDestinationHint
         )
       : buildTripMapStopsFromActivities(
-          activities.map((item, index) => ({
+        activities.map((item, index) => ({
             id: getStringField(item, ["id"]) || `activity-${index}`,
             title: getStringField(item, ACTIVITY_TITLE_KEYS) || "",
+            address: getStringField(item, ACTIVITY_ADDRESS_KEYS) || "",
             notes: getStringField(item, NOTES_KEYS) || "",
             date: formatDateTime(getDateField(item, ACTIVITY_DATE_KEYS)) || ""
           })),
@@ -4974,6 +5023,54 @@ function PlanDetailContent({ user }: { user: User }) {
     computedTotalCost
   ]);
 
+  const handleResolvedTripMapStops = (nextStops: TripMapResolvedStop[]) => {
+    if (!canEdit || nextStops.length === 0) {
+      return;
+    }
+
+    const resolvedById = new Map(nextStops.map((stop) => [stop.id, stop.placeName]));
+
+    setHotelEdits((prev) => {
+      let changed = false;
+      const next = prev.map((draft, index) => {
+        const draftId =
+          typeof draft.raw.id === "string" || typeof draft.raw.id === "number"
+            ? String(draft.raw.id)
+            : `hotel-draft-${index}`;
+        const placeName = resolvedById.get(draftId);
+        if (!placeName || draft.address.value.trim()) {
+          return draft;
+        }
+        changed = true;
+        return {
+          ...draft,
+          address: { ...draft.address, value: placeName }
+        };
+      });
+      return changed ? next : prev;
+    });
+
+    setActivityEdits((prev) => {
+      let changed = false;
+      const next = prev.map((draft, index) => {
+        const draftId =
+          typeof draft.raw.id === "string" || typeof draft.raw.id === "number"
+            ? String(draft.raw.id)
+            : `activity-draft-${index}`;
+        const placeName = resolvedById.get(draftId);
+        if (!placeName || draft.address.value.trim()) {
+          return draft;
+        }
+        changed = true;
+        return {
+          ...draft,
+          address: { ...draft.address, value: placeName }
+        };
+      });
+      return changed ? next : prev;
+    });
+  };
+
   return (
     <PageShell title={plan?.name || "プラン詳細"}>
       <div className="space-y-6">
@@ -5023,7 +5120,10 @@ function PlanDetailContent({ user }: { user: User }) {
 
         {plan ? (
           <div className="space-y-6">
-            <TripOverviewMapCard stops={tripMapStops} />
+            <TripOverviewMapCard
+              stops={tripMapStops}
+              onResolvedStops={handleResolvedTripMapStops}
+            />
 
             {!canEdit ? (
               <div className="rounded-2xl bg-white p-4 text-xs text-slate-500 shadow-cardSoft">
@@ -6324,6 +6424,45 @@ function PlanDetailContent({ user }: { user: User }) {
                                       className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                                     />
                                   </label>
+                                  <label className="mt-3 block text-xs font-semibold text-slate-500">
+                                    予約リンク
+                                    <div className="mt-2 flex items-center gap-2">
+                                      <input
+                                        value={draft.link.value}
+                                        onChange={(event) =>
+                                          updateTransport(index, (current) => ({
+                                            ...current,
+                                            link: { ...current.link, value: event.target.value }
+                                          }))
+                                        }
+                                        placeholder="https://..."
+                                        className="w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          void pasteFromClipboard((text) =>
+                                            updateTransport(index, (current) => ({
+                                              ...current,
+                                              link: { ...current.link, value: text }
+                                            }))
+                                          )
+                                        }
+                                        className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                                      >
+                                        貼り付け
+                                      </button>
+                                      {draft.link.value.trim() ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => openExternalLink(draft.link.value)}
+                                          className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                                        >
+                                          開く
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                  </label>
                                 </>
                               )}
                               <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-500">
@@ -6397,6 +6536,8 @@ function PlanDetailContent({ user }: { user: User }) {
                       ? (item.transfers as ItemRecord[])
                       : [];
                     const notes = getStringField(item, NOTES_KEYS);
+                    const link = getLinkField(item);
+                    const linkHref = link ? normalizeLink(link) : null;
 
                     return (
                       <div
@@ -6492,6 +6633,16 @@ function PlanDetailContent({ user }: { user: User }) {
                             </div>
                           ) : null}
                           {notes ? <p>メモ: {notes}</p> : null}
+                          {linkHref ? (
+                            <a
+                              href={linkHref}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-slate-900 underline underline-offset-4"
+                            >
+                              Google Flightsを開く
+                            </a>
+                          ) : null}
                         </div>
                       </div>
                     );
@@ -6654,6 +6805,20 @@ function PlanDetailContent({ user }: { user: User }) {
                                 />
                               </div>
                             </div>
+                            <label className="mt-3 block text-xs font-semibold text-slate-500">
+                              住所
+                              <input
+                                value={draft.address.value}
+                                onChange={(event) =>
+                                  updateHotel(index, (current) => ({
+                                    ...current,
+                                    address: { ...current.address, value: event.target.value }
+                                  }))
+                                }
+                                placeholder="例: 台北市中山区..."
+                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                              />
+                            </label>
                             <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-500">
                               <input
                                 type="checkbox"
@@ -6750,6 +6915,7 @@ function PlanDetailContent({ user }: { user: User }) {
                     const isPaid = getBooleanField(item, HOTEL_PAID_KEYS);
                     const checkIn = formatDate(getDateField(item, HOTEL_CHECKIN_KEYS));
                     const checkOut = formatDate(getDateField(item, HOTEL_CHECKOUT_KEYS));
+                    const address = getStringField(item, HOTEL_ADDRESS_KEYS);
                     const notes = getStringField(item, NOTES_KEYS);
                     const link = getLinkField(item);
                     const linkHref = link ? normalizeLink(link) : null;
@@ -6781,6 +6947,7 @@ function PlanDetailContent({ user }: { user: User }) {
                               <span>チェックアウト: {checkOut || "—"}</span>
                             </div>
                           )}
+                          {address ? <p>住所: {address}</p> : null}
                           {notes ? <p>メモ: {notes}</p> : null}
                           {linkHref ? (
                             <a
@@ -6837,6 +7004,20 @@ function PlanDetailContent({ user }: { user: User }) {
                                     title: { ...current.title, value: event.target.value }
                                   }))
                                 }
+                                className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
+                              />
+                            </label>
+                            <label className="block text-xs font-semibold text-slate-500">
+                              住所
+                              <input
+                                value={draft.address.value}
+                                onChange={(event) =>
+                                  updateActivity(index, (current) => ({
+                                    ...current,
+                                    address: { ...current.address, value: event.target.value }
+                                  }))
+                                }
+                                placeholder="例: 台北市信義区..."
                                 className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                               />
                             </label>
@@ -6924,6 +7105,7 @@ function PlanDetailContent({ user }: { user: User }) {
                     const title =
                       getStringField(item, ACTIVITY_TITLE_KEYS) ||
                       `アクティビティ ${index + 1}`;
+                    const address = getStringField(item, ACTIVITY_ADDRESS_KEYS);
                     const date = formatShortDateTime(
                       getDateField(item, ACTIVITY_DATE_KEYS)
                     );
@@ -6944,6 +7126,9 @@ function PlanDetailContent({ user }: { user: User }) {
                             <span className="text-xs text-slate-500">{date}</span>
                           ) : null}
                         </div>
+                        {address ? (
+                          <p className="mt-2 text-xs text-slate-500">住所: {address}</p>
+                        ) : null}
                         {notes ? (
                           <p className="mt-2 text-xs text-slate-500">メモ: {notes}</p>
                         ) : null}

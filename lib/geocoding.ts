@@ -18,6 +18,94 @@ function cleanQuery(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function normalizeSearchText(value: string) {
+  return cleanQuery(value)
+    .toLowerCase()
+    .replace(/[()（）]/g, " ")
+    .replace(/[,&/／、・]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const GENERIC_LOCATION_TOKENS = new Set([
+  "日本",
+  "japan",
+  "台湾",
+  "taiwan",
+  "タイ",
+  "thailand",
+  "韓国",
+  "korea",
+  "香港",
+  "hong",
+  "kong",
+  "台北",
+  "taipei",
+  "バンコク",
+  "bangkok",
+  "新北",
+  "new",
+  "taipei",
+  "市",
+  "県",
+  "区"
+]);
+
+function buildSearchTokens(query: string) {
+  const normalized = normalizeSearchText(query);
+  if (!normalized) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      normalized
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2)
+        .filter((token) => !GENERIC_LOCATION_TOKENS.has(token))
+    )
+  );
+}
+
+function scoreGeoapifyFeature(
+  feature: {
+    properties?: {
+      formatted?: string;
+      address_line1?: string;
+      address_line2?: string;
+    };
+  },
+  query: string
+) {
+  const haystack = normalizeSearchText(
+    [
+      feature.properties?.formatted,
+      feature.properties?.address_line1,
+      feature.properties?.address_line2
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+  if (!haystack) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const normalizedQuery = normalizeSearchText(query);
+  let score = 0;
+  if (haystack.includes(normalizedQuery)) {
+    score += 100;
+  }
+
+  const tokens = buildSearchTokens(query);
+  tokens.forEach((token) => {
+    if (haystack.includes(token)) {
+      score += token.length >= 4 ? 20 : 12;
+    }
+  });
+
+  return score;
+}
+
 function getCountryBias(query: string) {
   const normalized = cleanQuery(query);
   if (!normalized) {
@@ -97,7 +185,7 @@ async function searchWithGeoapify(query: string) {
   const url = new URL("https://api.geoapify.com/v1/geocode/search");
   url.searchParams.set("text", query);
   url.searchParams.set("lang", "ja");
-  url.searchParams.set("limit", "1");
+  url.searchParams.set("limit", "5");
   const countryBias = getCountryBias(query);
   if (countryBias) {
     url.searchParams.set("filter", `countrycode:${countryBias}`);
@@ -123,7 +211,11 @@ async function searchWithGeoapify(query: string) {
     }>;
   };
 
-  const feature = Array.isArray(payload.features) ? payload.features[0] : null;
+  const feature = Array.isArray(payload.features)
+    ? [...payload.features].sort(
+        (left, right) => scoreGeoapifyFeature(right, query) - scoreGeoapifyFeature(left, query)
+      )[0]
+    : null;
   const coordinates = Array.isArray(feature?.geometry?.coordinates)
     ? feature.geometry?.coordinates
     : null;

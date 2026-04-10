@@ -2,9 +2,9 @@
   "name": "trave-log-web",
   "private": true,
   "scripts": {
-    "dev": "node -e \"require('fs').rmSync('.next',{ recursive: true, force: true })\" && next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "rm -rf .next-dev && NEXT_DIST_DIR=.next-dev next dev",
+    "build": "rm -rf .next && NEXT_DIST_DIR=.next next build",
+    "start": "NEXT_DIST_DIR=.next next start",
     "lint": "next lint"
   },
   "dependencies": {
