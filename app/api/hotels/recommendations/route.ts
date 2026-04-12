@@ -280,6 +280,12 @@ function buildPublicGoogleHotelsUrl({
   return url.toString();
 }
 
+function buildHotelSearchQuery(name: string, destination: string, address?: string | null) {
+  return [cleanString(name), cleanString(destination), cleanString(address ?? "")]
+    .filter(Boolean)
+    .join(" ");
+}
+
 function buildDestinationQueries(destination: string) {
   const queries: string[] = [];
   const push = (value: string) => {
@@ -849,14 +855,6 @@ function sanitizeSerpHotelLink(link: string, fallbackLink: string) {
   return normalized;
 }
 
-function preferGoogleHotelsLink(payloadLink: string, providerLink: string, fallbackLink: string) {
-  const primary = sanitizePublicGoogleHotelsLink(payloadLink) || sanitizePublicGoogleHotelsLink(fallbackLink);
-  if (primary) {
-    return primary;
-  }
-  return sanitizeSerpHotelLink(providerLink, fallbackLink);
-}
-
 function extractSerpHotelRecommendations(
   payload: unknown,
   limit: number,
@@ -904,17 +902,13 @@ function extractSerpHotelRecommendations(
         property.total_rate && typeof property.total_rate === "object"
           ? (property.total_rate as Record<string, unknown>)
           : null;
-      const gps =
-        property.gps_coordinates && typeof property.gps_coordinates === "object"
-          ? (property.gps_coordinates as Record<string, unknown>)
-          : null;
       const price =
         parseNumber(ratePerNight?.lowest) ??
         parseNumber(ratePerNight?.extracted_lowest) ??
         parseNumber(totalRate?.lowest) ??
         parseNumber(totalRate?.extracted_lowest) ??
         parseNumber(property.price);
-      const currency =
+      const hotelCurrency =
         cleanString(ratePerNight?.currency) ||
         cleanString(totalRate?.currency) ||
         cleanString(property.currency) ||
@@ -932,23 +926,22 @@ function extractSerpHotelRecommendations(
         sanitizeHotelAddress(property.neighborhood)
       ].filter(Boolean);
       const address = addressParts.length > 0 ? addressParts.join(", ") : null;
-      const googleHotelsLink = cleanString(
-        fallbackLink ||
-          (gps?.latitude && gps?.longitude
-            ? `https://www.google.com/travel/hotels?q=${encodeURIComponent(name)}`
-            : "")
-      );
+      const searchQuery = buildHotelSearchQuery(name, query, address);
       const link =
-        preferGoogleHotelsLink(
-          cleanString(property.google_hotels_url ?? property.googleHotelsUrl),
-          cleanString(property.link),
-          googleHotelsLink
-        ) || null;
+        buildPublicGoogleHotelsUrl({
+          query: searchQuery || name,
+          checkIn,
+          checkOut,
+          adults,
+          currency: currency || hotelCurrency || DEFAULT_CURRENCY,
+          locale,
+          gl
+        }) || fallbackLink || null;
 
       return {
         name,
         price,
-        currency,
+        currency: hotelCurrency,
         score,
         reviewCount,
         address,

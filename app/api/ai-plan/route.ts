@@ -1157,6 +1157,34 @@ function extractHotelAreaPreferenceFromPrompt(prompt: string) {
   return candidate;
 }
 
+function extractFlightTravelClassPreference(prompt: string) {
+  const normalized = cleanString(prompt).toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  if (/ファースト|first class/.test(normalized)) {
+    return "first";
+  }
+  if (/ビジネス|business class/.test(normalized)) {
+    return "business";
+  }
+  if (/プレミアムエコノミー|premium economy/.test(normalized)) {
+    return "premium_economy";
+  }
+  if (/エコノミー|economy class/.test(normalized)) {
+    return "economy";
+  }
+  return "";
+}
+
+function extractNonstopPreference(prompt: string) {
+  const normalized = cleanString(prompt).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return /直行便|ノンストップ|nonstop|direct flight/.test(normalized);
+}
+
 function extractArrivalFromCurrentPlan(currentPlan: AiPlanSuggestion) {
   const transports = Array.isArray(currentPlan.transportations)
     ? currentPlan.transportations
@@ -1827,12 +1855,20 @@ async function fetchFlightCandidatesFromApi({
   request,
   from,
   to,
-  date
+  date,
+  budget,
+  travelStyle,
+  travelClass,
+  nonstopOnly
 }: {
   request: Request;
   from: string;
   to: string;
   date: string;
+  budget?: number | null;
+  travelStyle?: string;
+  travelClass?: string;
+  nonstopOnly?: boolean;
 }) {
   if (!from || !to || !date) {
     return {
@@ -1855,7 +1891,11 @@ async function fetchFlightCandidatesFromApi({
         adults: 1,
         locale: "ja",
         currency: "JPY",
-        limit: 1
+        limit: 1,
+        budget,
+        travelStyle,
+        travelClass,
+        nonstopOnly
       }),
       cache: "no-store"
     });
@@ -1889,19 +1929,31 @@ async function fetchRoundTripFlightCandidatesFromApi({
   from,
   to,
   departureDate,
-  returnDate
+  returnDate,
+  budget,
+  travelStyle,
+  travelClass,
+  nonstopOnly
 }: {
   request: Request;
   from: string;
   to: string;
   departureDate: string;
   returnDate?: string;
+  budget?: number | null;
+  travelStyle?: string;
+  travelClass?: string;
+  nonstopOnly?: boolean;
 }) {
   const outbound = await fetchFlightCandidatesFromApi({
     request,
     from,
     to,
-    date: departureDate
+    date: departureDate,
+    budget,
+    travelStyle,
+    travelClass,
+    nonstopOnly
   });
   const hasReturnDate =
     Boolean(returnDate) &&
@@ -1917,7 +1969,11 @@ async function fetchRoundTripFlightCandidatesFromApi({
     request,
     from: to,
     to: from,
-    date: returnDate as string
+    date: returnDate as string,
+    budget,
+    travelStyle,
+    travelClass,
+    nonstopOnly
   });
 
   return {
@@ -2107,6 +2163,13 @@ export async function POST(request: Request) {
       currentPlan = sanitizeAiPlanSuggestion({});
     }
   }
+  const currentPlanBudget = toNumber(currentPlanSource.budget);
+  const currentPlanTravelStyle = cleanString(currentPlanSource.travelStyle);
+  const currentPlanFlightClass = cleanString(currentPlanSource.flightClassPreference);
+  const requestedFlightClass =
+    currentPlanFlightClass || extractFlightTravelClassPreference(prompt);
+  const requestedNonstop =
+    cleanBoolean(currentPlanSource.nonstopOnly) || extractNonstopPreference(prompt);
   const chatHistory = parseChatHistory(chatHistoryRaw);
   const conversationContext = chatHistory
     .map((item) => `${item.role === "user" ? "ユーザー" : "AI"}: ${item.text}`)
@@ -2390,7 +2453,11 @@ export async function POST(request: Request) {
         from,
         to,
         departureDate: checkIn,
-        returnDate: checkOut || undefined
+        returnDate: checkOut || undefined,
+        budget: currentPlanBudget,
+        travelStyle: currentPlanTravelStyle,
+        travelClass: requestedFlightClass,
+        nonstopOnly: requestedNonstop
       });
       if (roundTripSupplement.transportations.length > 0) {
         const existingTransportations = transportRecords;

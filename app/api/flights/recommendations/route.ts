@@ -8,6 +8,8 @@ const DEFAULT_LOCALE = process.env.BOOKING_DEFAULT_LOCALE ?? "ja";
 const DEFAULT_CURRENCY = process.env.BOOKING_DEFAULT_CURRENCY ?? "JPY";
 const DEFAULT_GL = process.env.SERPAPI_GL ?? "jp";
 const SERPAPI_NO_CACHE = process.env.SERPAPI_NO_CACHE === "true";
+const DISABLE_LOCAL_RESPONSE_CACHE = process.env.NODE_ENV !== "production";
+const FLIGHT_CACHE_SCHEMA_VERSION = "v2";
 const LOCAL_RESPONSE_CACHE_TTL_MS = Math.max(
   0,
   Number(process.env.FLIGHT_RECOMMEND_CACHE_TTL_MS ?? 10 * 60 * 1000)
@@ -24,6 +26,12 @@ type RecommendationsRequest = {
   locale?: string;
   currency?: string;
   limit?: number;
+  budget?: number;
+  travelStyle?: string;
+  travelClass?: string;
+  nonstopOnly?: boolean;
+  preferredDepartureTime?: string;
+  preferredArrivalTime?: string;
 };
 
 type AirportCandidate = {
@@ -41,6 +49,7 @@ type FlightTransfer = {
 
 type FlightRecommendation = {
   airline: string | null;
+  airlineLogo: string | null;
   flightNumber: string | null;
   from: string | null;
   to: string | null;
@@ -51,8 +60,16 @@ type FlightRecommendation = {
   stops: number | null;
   via: string[] | null;
   transfers: FlightTransfer[];
+  totalDurationMinutes: number | null;
   link: string | null;
   source: "serpapi/google_flights" | "scrapeless/google_flights";
+};
+
+type FlightSelectionPreferences = {
+  budget: number | null;
+  travelStyle: string;
+  preferredDepartureTime: string;
+  preferredArrivalTime: string;
 };
 
 type UpstreamResult = {
@@ -81,6 +98,111 @@ function parseNumber(value: unknown) {
     }
   }
   return null;
+}
+
+function normalizeTravelStyle(value: string) {
+  const normalized = cleanString(value);
+  if (normalized === "節約" || normalized === "快適" || normalized === "プレミアム") {
+    return normalized;
+  }
+  return "標準";
+}
+
+function normalizeTravelClass(value: string) {
+  const normalized = cleanString(value).toLowerCase();
+  if (normalized === "economy" || normalized === "premium_economy" || normalized === "business" || normalized === "first") {
+    return normalized;
+  }
+  return "";
+}
+
+function normalizeClockTime(value: string) {
+  const match = cleanString(value).match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) {
+    return "";
+  }
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (
+    !Number.isFinite(hours) ||
+    !Number.isFinite(minutes) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59
+  ) {
+    return "";
+  }
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function toMinutesFromClock(value: string) {
+  const normalized = normalizeClockTime(value);
+  if (!normalized) {
+    return null;
+  }
+  const [hours, minutes] = normalized.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+function toMinutesFromDateTime(value: string | null) {
+  const text = cleanString(value);
+  if (!text) {
+    return null;
+  }
+  const match = text.match(/(?:T|\s)(\d{1,2}):(\d{2})/);
+  if (!match) {
+    return null;
+  }
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+    return null;
+  }
+  return hours * 60 + minutes;
+}
+
+function scoreTimePreference(actual: string | null, preferred: string) {
+  const actualMinutes = toMinutesFromDateTime(actual);
+  const preferredMinutes = toMinutesFromClock(preferred);
+  if (actualMinutes === null || preferredMinutes === null) {
+    return 0;
+  }
+  const diff = Math.abs(actualMinutes - preferredMinutes);
+  if (diff <= 30) {
+    return 24;
+  }
+  if (diff <= 60) {
+    return 16;
+  }
+  if (diff <= 120) {
+    return 8;
+  }
+  if (diff <= 180) {
+    return 2;
+  }
+  if (diff >= 360) {
+    return -16;
+  }
+  if (diff >= 240) {
+    return -8;
+  }
+  return -2;
+}
+
+function toSerpTravelClass(value: string) {
+  switch (value) {
+    case "premium_economy":
+      return "2";
+    case "business":
+      return "3";
+    case "first":
+      return "4";
+    case "economy":
+      return "1";
+    default:
+      return "";
+  }
 }
 
 function toArray(value: unknown) {
@@ -567,7 +689,7 @@ function extractFlightTransfers(segments: Record<string, unknown>[]) {
   return transfers;
 }
 
-function mapSerpFlights(payload: unknown, limit: number, currency: string) {
+function mapSerpFlights(payload: unknown, _limit: number, currency: string) {
   if (!payload || typeof payload !== "object") {
     return [];
   }
@@ -638,6 +760,7 @@ function mapSerpFlights(payload: unknown, limit: number, currency: string) {
 
     flights.push({
       airline,
+      airlineLogo: cleanString(group.airline_logo) || cleanString(first.airline_logo) || null,
       flightNumber,
       from,
       to,
@@ -648,6 +771,7 @@ function mapSerpFlights(payload: unknown, limit: number, currency: string) {
       stops,
       via: via.length > 0 ? via : null,
       transfers,
+      totalDurationMinutes: parseNumber(group.total_duration),
       link: token || null,
       source: "serpapi/google_flights"
     });
@@ -666,13 +790,179 @@ function mapSerpFlights(payload: unknown, limit: number, currency: string) {
     }
   });
 
-  return Array.from(deduped.values())
-    .sort((a, b) => {
-      const pa = typeof a.price === "number" ? a.price : Number.POSITIVE_INFINITY;
-      const pb = typeof b.price === "number" ? b.price : Number.POSITIVE_INFINITY;
-      return pa - pb;
-    })
-    .slice(0, limit);
+  return Array.from(deduped.values());
+}
+
+function scoreFlightForSelection(
+  flight: FlightRecommendation,
+  preferences: FlightSelectionPreferences
+) {
+  let score = 0;
+  const price = typeof flight.price === "number" ? flight.price : null;
+  const stops = typeof flight.stops === "number" ? flight.stops : 0;
+  const airline = cleanString(flight.airline).toLowerCase();
+  const hasTransfer = Array.isArray(flight.transfers) && flight.transfers.length > 0;
+
+  if (price !== null) {
+    score -= price / 1500;
+  } else {
+    score -= 90;
+  }
+  score -= stops * 24;
+  if (hasTransfer) {
+    score -= 16;
+  }
+
+  const premiumAirlines = [
+    "jal",
+    "japan airlines",
+    "ana",
+    "all nippon airways",
+    "singapore airlines",
+    "emirates",
+    "qatar airways",
+    "cathay pacific",
+    "turkish airlines",
+    "lufthansa",
+    "air france",
+    "swiss",
+    "british airways",
+    "eva air"
+  ];
+  const lowCostAirlines = [
+    "peach",
+    "jetstar",
+    "airasia",
+    "zipair",
+    "tway",
+    "jeju air",
+    "hong kong express",
+    "scoot",
+    "spring japan",
+    "vietjet",
+    "cebu pacific"
+  ];
+
+  const isPremiumAirline = premiumAirlines.some((token) => airline.includes(token));
+  const isLowCostAirline = lowCostAirlines.some((token) => airline.includes(token));
+
+  if (isPremiumAirline) {
+    score += 22;
+  }
+  if (isLowCostAirline) {
+    score -= 18;
+  }
+
+  if (preferences.travelStyle === "節約") {
+    if (price !== null) {
+      score -= price / 1200;
+    }
+    if (isLowCostAirline) {
+      score += 18;
+    }
+  } else if (preferences.travelStyle === "快適") {
+    score -= stops * 20;
+    if (isPremiumAirline) {
+      score += 20;
+    }
+    if (isLowCostAirline) {
+      score -= 24;
+    }
+  } else if (preferences.travelStyle === "プレミアム") {
+    score -= stops * 34;
+    if (isPremiumAirline) {
+      score += 36;
+    }
+    if (isLowCostAirline) {
+      score -= 44;
+    }
+    if (preferences.budget !== null && price !== null && price <= preferences.budget * 0.55) {
+      score += 14;
+    }
+  }
+
+  if (preferences.budget !== null && price !== null) {
+    if (price > preferences.budget * 1.1) {
+      score -= 80;
+    } else if (price <= preferences.budget) {
+      score += 12;
+    }
+  }
+
+  score += scoreTimePreference(flight.depTime, preferences.preferredDepartureTime);
+  score += scoreTimePreference(flight.arrTime, preferences.preferredArrivalTime);
+
+  return score;
+}
+
+function rankFlightsForSelection(
+  flights: FlightRecommendation[],
+  preferences: FlightSelectionPreferences,
+  limit: number
+) {
+  const sorted = [...flights].sort((a, b) => {
+    const scoreDiff =
+      scoreFlightForSelection(b, preferences) - scoreFlightForSelection(a, preferences);
+    if (scoreDiff !== 0) {
+      return scoreDiff;
+    }
+    const pa = typeof a.price === "number" ? a.price : Number.POSITIVE_INFINITY;
+    const pb = typeof b.price === "number" ? b.price : Number.POSITIVE_INFINITY;
+    return pa - pb;
+  });
+
+  const selected: FlightRecommendation[] = [];
+  const countsByAirline = new Map<string, number>();
+  const seenKeys = new Set<string>();
+  const appendFlight = (flight: FlightRecommendation) => {
+    const key = [
+      cleanString(flight.airline),
+      cleanString(flight.flightNumber),
+      cleanString(flight.depTime),
+      cleanString(flight.from),
+      cleanString(flight.to)
+    ].join("|");
+    if (!key || seenKeys.has(key)) {
+      return false;
+    }
+    selected.push(flight);
+    seenKeys.add(key);
+    const airlineKey = cleanString(flight.airline) || "__unknown__";
+    countsByAirline.set(airlineKey, (countsByAirline.get(airlineKey) ?? 0) + 1);
+    return true;
+  };
+
+  const takePass = (maxPerAirline: number) => {
+    for (const flight of sorted) {
+      if (selected.length >= limit) {
+        break;
+      }
+      const airlineKey = cleanString(flight.airline) || "__unknown__";
+      if ((countsByAirline.get(airlineKey) ?? 0) >= maxPerAirline) {
+        continue;
+      }
+      appendFlight(flight);
+    }
+  };
+
+  // まずは航空会社の種類を広く見せる。プレミアム指定でも同一社だけで埋めない。
+  takePass(1);
+  if (selected.length < limit) {
+    takePass(2);
+  }
+  if (selected.length < limit) {
+    takePass(3);
+  }
+  if (selected.length < limit) {
+    for (const flight of sorted) {
+      if (selected.length >= limit) {
+        break;
+      }
+      appendFlight(flight);
+    }
+  }
+
+  return selected.slice(0, limit);
 }
 
 function unwrapScrapelessPayload(payload: unknown) {
@@ -698,7 +988,7 @@ function unwrapScrapelessPayload(payload: unknown) {
   return root;
 }
 
-function mapScrapelessFlights(payload: unknown, limit: number, currency: string) {
+function mapScrapelessFlights(payload: unknown, _limit: number, currency: string) {
   const root = unwrapScrapelessPayload(payload);
   const groups = [...toArray(root.best_flights), ...toArray(root.other_flights)];
   const flights: FlightRecommendation[] = [];
@@ -763,6 +1053,7 @@ function mapScrapelessFlights(payload: unknown, limit: number, currency: string)
 
     flights.push({
       airline,
+      airlineLogo: cleanString(group.airline_logo) || cleanString(first.airline_logo) || null,
       flightNumber,
       from,
       to,
@@ -773,6 +1064,7 @@ function mapScrapelessFlights(payload: unknown, limit: number, currency: string)
       stops,
       via: via.length > 0 ? via : null,
       transfers,
+      totalDurationMinutes: parseNumber(group.total_duration),
       link: null,
       source: "scrapeless/google_flights"
     });
@@ -791,13 +1083,7 @@ function mapScrapelessFlights(payload: unknown, limit: number, currency: string)
     }
   });
 
-  return Array.from(deduped.values())
-    .sort((a, b) => {
-      const pa = typeof a.price === "number" ? a.price : Number.POSITIVE_INFINITY;
-      const pb = typeof b.price === "number" ? b.price : Number.POSITIVE_INFINITY;
-      return pa - pb;
-    })
-    .slice(0, limit);
+  return Array.from(deduped.values());
 }
 
 async function fetchScrapelessFlights({
@@ -868,7 +1154,9 @@ function buildFlightsUrl({
   adults,
   currency,
   hl,
-  gl
+  gl,
+  travelClass,
+  nonstopOnly
 }: {
   apiKey: string;
   fromCode: string;
@@ -878,6 +1166,8 @@ function buildFlightsUrl({
   currency: string;
   hl: string;
   gl: string;
+  travelClass?: string;
+  nonstopOnly?: boolean;
 }) {
   const url = new URL(SERPAPI_ENDPOINT);
   url.searchParams.set("api_key", apiKey);
@@ -891,6 +1181,13 @@ function buildFlightsUrl({
   url.searchParams.set("hl", hl);
   url.searchParams.set("gl", gl);
   url.searchParams.set("no_cache", SERPAPI_NO_CACHE ? "true" : "false");
+  const serpTravelClass = toSerpTravelClass(normalizeTravelClass(travelClass ?? ""));
+  if (serpTravelClass) {
+    url.searchParams.set("travel_class", serpTravelClass);
+  }
+  if (nonstopOnly) {
+    url.searchParams.set("stops", "0");
+  }
   return url;
 }
 
@@ -902,20 +1199,38 @@ function buildLocalCacheKey(params: {
   locale: string;
   currency: string;
   limit: number;
+  budget: number | null;
+  travelStyle: string;
+  travelClass: string;
+  nonstopOnly: boolean;
+  preferredDepartureTime: string;
+  preferredArrivalTime: string;
 }) {
   return [
+    FLIGHT_CACHE_SCHEMA_VERSION,
     params.from.trim().toLowerCase(),
     params.to.trim().toLowerCase(),
     params.date.trim(),
     params.adults,
     params.locale.trim().toLowerCase(),
     params.currency.trim().toUpperCase(),
-    params.limit
+    params.limit,
+    params.budget ?? "",
+    params.travelStyle,
+    params.travelClass,
+    params.nonstopOnly ? "1" : "0",
+    params.preferredDepartureTime,
+    params.preferredArrivalTime
   ].join("|");
 }
 
 function getCachedPayload(key: string) {
-  if (!key || SERPAPI_NO_CACHE || LOCAL_RESPONSE_CACHE_TTL_MS <= 0) {
+  if (
+    !key ||
+    DISABLE_LOCAL_RESPONSE_CACHE ||
+    SERPAPI_NO_CACHE ||
+    LOCAL_RESPONSE_CACHE_TTL_MS <= 0
+  ) {
     return null;
   }
   const cached = localResponseCache.get(key);
@@ -930,7 +1245,12 @@ function getCachedPayload(key: string) {
 }
 
 function setCachedPayload(key: string, payload: unknown) {
-  if (!key || SERPAPI_NO_CACHE || LOCAL_RESPONSE_CACHE_TTL_MS <= 0) {
+  if (
+    !key ||
+    DISABLE_LOCAL_RESPONSE_CACHE ||
+    SERPAPI_NO_CACHE ||
+    LOCAL_RESPONSE_CACHE_TTL_MS <= 0
+  ) {
     return;
   }
   localResponseCache.set(key, {
@@ -953,7 +1273,13 @@ export async function POST(request: Request) {
   const locale = cleanString(body.locale) || DEFAULT_LOCALE;
   const currency = (cleanString(body.currency) || DEFAULT_CURRENCY).toUpperCase();
   const adults = Math.max(1, Math.min(8, Math.floor(body.adults ?? 1)));
-  const limit = Math.max(1, Math.min(8, Math.floor(body.limit ?? 5)));
+  const limit = Math.max(1, Math.min(12, Math.floor(body.limit ?? 5)));
+  const budget = parseNumber(body.budget);
+  const travelStyle = normalizeTravelStyle(cleanString(body.travelStyle));
+  const travelClass = normalizeTravelClass(cleanString(body.travelClass));
+  const nonstopOnly = cleanString(String(body.nonstopOnly ?? "")).toLowerCase() === "true";
+  const preferredDepartureTime = normalizeClockTime(cleanString(body.preferredDepartureTime));
+  const preferredArrivalTime = normalizeClockTime(cleanString(body.preferredArrivalTime));
   const hl = locale === "ja" ? "ja" : "en";
   const gl = DEFAULT_GL;
 
@@ -970,7 +1296,13 @@ export async function POST(request: Request) {
     adults,
     locale,
     currency,
-    limit
+    limit,
+    budget,
+    travelStyle,
+    travelClass,
+    nonstopOnly,
+    preferredDepartureTime,
+    preferredArrivalTime
   });
   const cachedPayload = getCachedPayload(cacheKey);
   if (cachedPayload) {
@@ -1002,12 +1334,24 @@ export async function POST(request: Request) {
         adults,
         currency,
         hl,
-        gl
+        gl,
+        travelClass,
+        nonstopOnly
       });
       const result = await fetchUpstreamWithRetry(flightsUrl);
       if (result.ok) {
         const flights = mapSerpFlights(result.payload, limit, currency);
         if (flights.length > 0) {
+          const rankedFlights = rankFlightsForSelection(
+            flights,
+            {
+              budget,
+              travelStyle,
+              preferredDepartureTime,
+              preferredArrivalTime
+            },
+            limit
+          );
           const payload = {
             fromResolved: {
               code: fromResolved.code,
@@ -1019,7 +1363,7 @@ export async function POST(request: Request) {
               name: toResolved.name,
               type: "AIRPORT"
             },
-            flights,
+            flights: rankedFlights,
             warnings: []
           };
           setCachedPayload(cacheKey, payload);
@@ -1052,6 +1396,16 @@ export async function POST(request: Request) {
         currency
       });
       if (fallback.ok && fallback.flights.length > 0) {
+        const rankedFlights = rankFlightsForSelection(
+          fallback.flights,
+          {
+            budget,
+            travelStyle,
+            preferredDepartureTime,
+            preferredArrivalTime
+          },
+          limit
+        );
         const warnings = serpFailure
           ? ["SerpApiのクォータ制限のため、Scrapelessでフライト候補を取得しました。"]
           : [];
@@ -1066,7 +1420,7 @@ export async function POST(request: Request) {
             name: toResolved?.name || arrivalId,
             type: "AIRPORT"
           },
-          flights: fallback.flights,
+          flights: rankedFlights,
           warnings
         };
         setCachedPayload(cacheKey, payload);

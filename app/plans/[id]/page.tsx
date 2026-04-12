@@ -13,7 +13,7 @@ import type { User } from "firebase/auth";
 import { useParams, useSearchParams } from "next/navigation";
 import AuthGate from "@/components/AuthGate";
 import PageShell from "@/components/PageShell";
-import dynamic from "next/dynamic";
+import TripOverviewMapCanvas from "@/components/TripOverviewMapCanvas";
 import {
   addMonths,
   differenceInCalendarDays,
@@ -40,13 +40,6 @@ import {
   type TravelPlan
 } from "@/lib/firestore";
 import { formatDate, formatDateTime, formatYen } from "@/lib/format";
-
-const TripOverviewMapCanvas = dynamic(
-  () => import("@/components/TripOverviewMapCanvas"),
-  {
-    ssr: false
-  }
-);
 
 function getPlanProgress(plan: TravelPlan) {
   if (typeof plan.totalCost !== "number") {
@@ -195,6 +188,48 @@ type HotelRecommendationsResponse = {
     type?: string;
   };
   hotels?: HotelRecommendation[];
+  warnings?: string[];
+  detail?: string;
+  error?: string;
+};
+
+type FlightTransferRecommendation = {
+  station: string | null;
+  serviceName: string | null;
+  arrTime: string | null;
+  depTime: string | null;
+};
+
+type FlightRecommendation = {
+  airline: string | null;
+  airlineLogo: string | null;
+  flightNumber: string | null;
+  from: string | null;
+  to: string | null;
+  depTime: string | null;
+  arrTime: string | null;
+  price: number | null;
+  currency: string | null;
+  stops: number | null;
+  via: string[] | null;
+  transfers: FlightTransferRecommendation[];
+  totalDurationMinutes: number | null;
+  link: string | null;
+  source: string;
+};
+
+type FlightRecommendationsResponse = {
+  fromResolved?: {
+    code?: string;
+    name?: string;
+    type?: string;
+  };
+  toResolved?: {
+    code?: string;
+    name?: string;
+    type?: string;
+  };
+  flights?: FlightRecommendation[];
   warnings?: string[];
   detail?: string;
   error?: string;
@@ -702,6 +737,18 @@ function formatFlightDateTime(value?: string) {
   return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
 }
 
+function formatFlightDuration(minutes?: number | null) {
+  if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) {
+    return "";
+  }
+  const hours = Math.floor(minutes / 60);
+  const remain = minutes % 60;
+  if (hours <= 0) {
+    return `${remain}分`;
+  }
+  return `${hours}時間${remain > 0 ? ` ${remain}分` : ""}`;
+}
+
 function extractDateOnly(value?: string) {
   if (!value) {
     return "";
@@ -724,6 +771,28 @@ function extractTimeOnly(value?: string) {
   }
   const [, hh, mm] = match;
   return `${hh.padStart(2, "0")}:${mm.padStart(2, "0")}`;
+}
+
+function formatFlightTimeValue(value?: string | null) {
+  const direct = extractTimeOnly(value ?? "");
+  if (direct) {
+    return direct;
+  }
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) {
+    return "—:—";
+  }
+  const isoMatch = text.match(/T(\d{2}:\d{2})/);
+  if (isoMatch?.[1]) {
+    return isoMatch[1];
+  }
+  const parseable = new Date(text);
+  if (!Number.isNaN(parseable.getTime())) {
+    return `${String(parseable.getHours()).padStart(2, "0")}:${String(
+      parseable.getMinutes()
+    ).padStart(2, "0")}`;
+  }
+  return "—:—";
 }
 
 function buildDateTimeValue(datePart: string, timePart: string) {
@@ -3371,6 +3440,13 @@ function PlanDetailContent({ user }: { user: User }) {
   const [flightFetchingId, setFlightFetchingId] = useState<string | null>(null);
   const [flightFetchError, setFlightFetchError] = useState<string | null>(null);
   const [flightFetchErrorId, setFlightFetchErrorId] = useState<string | null>(null);
+  const [flightRecoLoadingId, setFlightRecoLoadingId] = useState<string | null>(null);
+  const [flightRecoErrorId, setFlightRecoErrorId] = useState<string | null>(null);
+  const [flightRecoError, setFlightRecoError] = useState<string | null>(null);
+  const [flightRecoById, setFlightRecoById] = useState<Record<string, FlightRecommendation[]>>({});
+  const [flightRecoWarningsById, setFlightRecoWarningsById] = useState<Record<string, string[]>>({});
+  const [flightRecoSheetId, setFlightRecoSheetId] = useState<string | null>(null);
+  const autoFlightRecoKeyRef = useRef<Record<string, string>>({});
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiImages, setAiImages] = useState<File[]>([]);
   const [aiAssistantMode, setAiAssistantMode] = useState<AiAssistantMode>("consult");
@@ -3836,6 +3912,125 @@ function PlanDetailContent({ user }: { user: User }) {
     };
   };
 
+  const requestFlightRecommendations = async ({
+    from,
+    to,
+    date,
+    limit = 12
+  }: {
+    from: string;
+    to: string;
+    date: string;
+    limit?: number;
+  }) => {
+    const response = await fetch("/api/flights/recommendations", {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from,
+        to,
+        date,
+        adults: 1,
+        locale: "ja",
+        currency: "JPY",
+        limit
+      })
+    });
+
+    const payload = (await response.json()) as Partial<FlightRecommendationsResponse>;
+    if (!response.ok) {
+      throw new Error(
+        payload.detail?.trim() ||
+        payload.error?.trim() ||
+        "フライト候補の取得に失敗しました。"
+      );
+    }
+
+    return {
+      recommendations: Array.isArray(payload.flights) ? payload.flights : [],
+      warnings: Array.isArray(payload.warnings)
+        ? payload.warnings.map((item) => item.trim()).filter(Boolean)
+        : []
+    };
+  };
+
+  const applyFlightRecommendationToDraft = (
+    transportId: string,
+    recommendation: FlightRecommendation
+  ) => {
+    updateTransportById(
+      transportId,
+      (current) => ({
+        ...current,
+        mode: { ...current.mode, value: "飛行機" },
+        name: {
+          ...current.name,
+          value: compactText(recommendation.airline ?? "") || current.name.value
+        },
+        serviceName: {
+          ...current.serviceName,
+          value: compactText(recommendation.flightNumber ?? "") || current.serviceName.value
+        },
+        from: {
+          ...current.from,
+          value: compactText(recommendation.from ?? "") || current.from.value
+        },
+        to: {
+          ...current.to,
+          value: compactText(recommendation.to ?? "") || current.to.value
+        },
+        depTime: {
+          ...current.depTime,
+          value: compactText(recommendation.depTime ?? "") || current.depTime.value
+        },
+        arrTime: {
+          ...current.arrTime,
+          value: compactText(recommendation.arrTime ?? "") || current.arrTime.value
+        },
+        price: {
+          ...current.price,
+          value:
+            typeof recommendation.price === "number"
+              ? String(Math.round(recommendation.price))
+              : current.price.value
+        },
+        currency: {
+          ...current.currency,
+          value: normalizePriceCurrency(recommendation.currency ?? "JPY")
+        },
+        link: {
+          ...current.link,
+          value: compactText(recommendation.link ?? "")
+        },
+        notes: {
+          ...current.notes,
+          value: [
+            typeof recommendation.stops === "number"
+              ? recommendation.stops === 0
+                ? "直行便"
+                : `${recommendation.stops}回経由`
+              : "",
+            formatFlightDuration(recommendation.totalDurationMinutes),
+            recommendation.source ? `source: ${recommendation.source}` : ""
+          ]
+            .filter(Boolean)
+            .join(" / ")
+        },
+        transfers: buildTransferDrafts(
+          (recommendation.transfers ?? []).map((transfer) => ({
+            id: createDraftId(),
+            station: compactText(transfer.station ?? ""),
+            serviceName: compactText(transfer.serviceName ?? ""),
+            arrivalTime: compactText(transfer.arrTime ?? ""),
+            departureTime: compactText(transfer.depTime ?? "")
+          }))
+        )
+      }),
+      { sort: true }
+    );
+  };
+
   const updateTransport = (
     index: number,
     updater: (draft: TransportationDraft) => TransportationDraft,
@@ -4038,6 +4233,111 @@ function PlanDetailContent({ user }: { user: User }) {
       setFlightFetchingId(null);
     }
   };
+
+  const handleFetchFlightRecommendations = async (
+    transportId: string,
+    options?: { openSheet?: boolean }
+  ) => {
+    const draft = transportEdits.find((item) => item.id === transportId);
+    if (!draft) {
+      return;
+    }
+
+    const from = draft.from.value.trim();
+    const to = draft.to.value.trim();
+    const date =
+      extractDateOnly(draft.depTime.value) ||
+      editValues.startDate.trim() ||
+      "";
+
+    if (!from || !to || !date) {
+      setFlightRecoError("出発地・到着地・出発日を入れてから候補便を取得してください。");
+      setFlightRecoErrorId(transportId);
+      return;
+    }
+
+    setFlightRecoLoadingId(transportId);
+    setFlightRecoError(null);
+    setFlightRecoErrorId(null);
+    setFlightRecoWarningsById((prev) => ({ ...prev, [transportId]: [] }));
+
+    try {
+      const result = await requestFlightRecommendations({
+        from,
+        to,
+        date,
+        limit: 12
+      });
+      setFlightRecoById((prev) => ({
+        ...prev,
+        [transportId]: result.recommendations
+      }));
+      setFlightRecoWarningsById((prev) => ({
+        ...prev,
+        [transportId]: result.warnings
+      }));
+      if (options?.openSheet) {
+        setFlightRecoSheetId(transportId);
+      }
+      if (result.recommendations.length === 0) {
+        setFlightRecoError("候補便が見つかりませんでした。条件を少し変えて再試行してください。");
+        setFlightRecoErrorId(transportId);
+      }
+    } catch (error) {
+      setFlightRecoError(
+        error instanceof Error && error.message
+          ? error.message
+          : "フライト候補の取得に失敗しました。"
+      );
+      setFlightRecoErrorId(transportId);
+      setFlightRecoById((prev) => ({ ...prev, [transportId]: [] }));
+    } finally {
+      setFlightRecoLoadingId(null);
+    }
+  };
+
+  const activeFlightRecoDraft =
+    flightRecoSheetId
+      ? transportEdits.find((item) => item.id === flightRecoSheetId) ?? null
+      : null;
+  const activeFlightRecoCandidates = flightRecoSheetId
+    ? flightRecoById[flightRecoSheetId] ?? []
+    : [];
+  const activeFlightRecoWarnings = flightRecoSheetId
+    ? flightRecoWarningsById[flightRecoSheetId] ?? []
+    : [];
+
+  useEffect(() => {
+    const flightDrafts = transportEdits.filter((draft) => draft.mode.value === "飛行機");
+    flightDrafts.forEach((draft) => {
+      const from = draft.from.value.trim();
+      const to = draft.to.value.trim();
+      const date = extractDateOnly(draft.depTime.value) || editValues.startDate.trim() || "";
+      if (!from || !to || !date) {
+        return;
+      }
+
+      const signature = [from, to, date].join("|");
+      const previousSignature = autoFlightRecoKeyRef.current[draft.id];
+      const hasCandidates = (flightRecoById[draft.id]?.length ?? 0) > 0;
+      const hasWarnings = (flightRecoWarningsById[draft.id]?.length ?? 0) > 0;
+      const isLoading = flightRecoLoadingId === draft.id;
+      if (previousSignature === signature || hasCandidates || hasWarnings || isLoading) {
+        return;
+      }
+
+      autoFlightRecoKeyRef.current[draft.id] = signature;
+      void handleFetchFlightRecommendations(draft.id);
+    });
+  }, [
+    editValues.startDate,
+    flightRecoById,
+    flightRecoError,
+    flightRecoErrorId,
+    flightRecoLoadingId,
+    flightRecoWarningsById,
+    transportEdits
+  ]);
 
   const handleAiImagesSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []).filter((file) =>
@@ -5072,6 +5372,7 @@ function PlanDetailContent({ user }: { user: User }) {
   };
 
   return (
+    <>
     <PageShell title={plan?.name || "プラン詳細"}>
       <div className="space-y-6">
         {planError ? (
@@ -5893,22 +6194,44 @@ function PlanDetailContent({ user }: { user: User }) {
                                                 className="w-full flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900"
                                               />
                                               {draft.mode.value === "飛行機" ? (
-                                                <button
-                                                  type="button"
-                                                  onClick={() => fetchFlightInfo(draft.id)}
-                                                  disabled={flightFetchingId === draft.id}
-                                                  className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
-                                                >
-                                                  {flightFetchingId === draft.id
-                                                    ? "取得中..."
-                                                    : "便情報"}
-                                                </button>
+                                                <div className="flex gap-2">
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => fetchFlightInfo(draft.id)}
+                                                    disabled={flightFetchingId === draft.id}
+                                                    className="rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
+                                                  >
+                                                    {flightFetchingId === draft.id
+                                                      ? "取得中..."
+                                                      : "便情報"}
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      void handleFetchFlightRecommendations(draft.id, {
+                                                        openSheet: true
+                                                      });
+                                                    }}
+                                                    disabled={flightRecoLoadingId === draft.id}
+                                                    className="rounded-full border border-slate-200 bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
+                                                  >
+                                                    {flightRecoLoadingId === draft.id
+                                                      ? "取得中..."
+                                                      : "候補便"}
+                                                  </button>
+                                                </div>
                                               ) : null}
                                             </div>
                                             {flightFetchError &&
                                               flightFetchErrorId === draft.id ? (
                                               <p className="mt-2 text-xs text-rose-500">
                                                 {flightFetchError}
+                                              </p>
+                                            ) : null}
+                                            {flightRecoError &&
+                                              flightRecoErrorId === draft.id ? (
+                                              <p className="mt-2 text-xs text-rose-500">
+                                                {flightRecoError}
                                               </p>
                                             ) : null}
                                           </label>
@@ -5934,6 +6257,29 @@ function PlanDetailContent({ user }: { user: User }) {
                                       </div>
                                     ) : null;
                                   })()}
+                                  {draft.mode.value === "飛行機" &&
+                                  ((flightRecoById[draft.id]?.length ?? 0) > 0 ||
+                                    (flightRecoWarningsById[draft.id]?.length ?? 0) > 0) ? (
+                                    <div className="mb-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                                      <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                          <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-500">
+                                            Flight Options
+                                          </p>
+                                          <p className="mt-1 text-xs text-slate-500">
+                                            {(flightRecoById[draft.id]?.length ?? 0)}件の候補があります
+                                          </p>
+                                        </div>
+                                        <button
+                                          type="button"
+                                          onClick={() => setFlightRecoSheetId(draft.id)}
+                                          className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                                        >
+                                          候補を選ぶ
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : null}
                                   <div className="grid gap-3 md:grid-cols-2">
                                     <label className="block text-xs font-semibold text-slate-500">
                                       金額
@@ -7724,6 +8070,150 @@ function PlanDetailContent({ user }: { user: User }) {
         ) : null}
       </div>
     </PageShell>
+    {flightRecoSheetId && typeof window !== "undefined"
+      ? createPortal(
+        <div className="fixed inset-0 z-[1400] flex items-end justify-center bg-slate-900/30 p-4 backdrop-blur-sm sm:items-center">
+          <div className="w-full max-w-3xl overflow-hidden rounded-[28px] border border-white/70 bg-white/95 shadow-[0_28px_80px_-28px_rgba(15,23,42,0.45)]">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-slate-500">
+                  Flight Options
+                </p>
+                <h3 className="mt-1 text-lg font-bold text-slate-900">
+                  候補便を選択
+                </h3>
+                {activeFlightRecoDraft ? (
+                  <p className="mt-1 text-sm text-slate-500">
+                    {activeFlightRecoDraft.from.value || "出発地未設定"} →{" "}
+                    {activeFlightRecoDraft.to.value || "到着地未設定"}
+                  </p>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                onClick={() => setFlightRecoSheetId(null)}
+                className="rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+              >
+                閉じる
+              </button>
+            </div>
+            <div className="max-h-[75vh] overflow-y-auto px-5 py-4">
+              {activeFlightRecoWarnings.length > 0 ? (
+                <div className="mb-3 space-y-1 rounded-2xl bg-amber-50 px-4 py-3 text-xs text-amber-700">
+                  {activeFlightRecoWarnings.map((warning, index) => (
+                    <p key={`active-flight-warning-${index}`}>・{warning}</p>
+                  ))}
+                </div>
+              ) : null}
+              {activeFlightRecoCandidates.length === 0 ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-600">
+                  候補便が見つかりませんでした。
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {activeFlightRecoCandidates.map((candidate, candidateIndex) => {
+                    const logo = normalizeLink(candidate.airlineLogo ?? "");
+                    const times = [
+                      formatFlightTimeValue(candidate.depTime),
+                      formatFlightTimeValue(candidate.arrTime)
+                    ].join(" - ");
+                    const meta = [
+                      formatFlightDuration(candidate.totalDurationMinutes),
+                      typeof candidate.stops === "number"
+                        ? candidate.stops === 0
+                          ? "直行便"
+                          : `${candidate.stops}回経由`
+                        : "",
+                      candidate.via?.length ? `経由: ${candidate.via.join(" / ")}` : ""
+                    ]
+                      .filter(Boolean)
+                      .join(" / ");
+                    return (
+                      <div
+                        key={`flight-reco-sheet-${candidateIndex}`}
+                        className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm"
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex min-w-0 flex-1 gap-3">
+                            <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-slate-100 text-xs font-black text-slate-700">
+                              {logo ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={logo}
+                                  alt={candidate.airline ?? "airline"}
+                                  className="h-full w-full object-contain"
+                                />
+                              ) : (
+                                <span>{(candidate.airline ?? "?").slice(0, 2).toUpperCase()}</span>
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                <p className="truncate text-base font-bold text-slate-900">
+                                  {candidate.airline || "航空会社未取得"}
+                                </p>
+                                {candidate.flightNumber ? (
+                                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">
+                                    {candidate.flightNumber}
+                                  </span>
+                                ) : null}
+                              </div>
+                              <p className="mt-1 text-base font-semibold text-slate-800">
+                                {times}
+                              </p>
+                              <p className="mt-1 text-sm text-slate-500">
+                                {(candidate.from ?? "").replace(/\s+/g, " ")} →{" "}
+                                {(candidate.to ?? "").replace(/\s+/g, " ")}
+                              </p>
+                              <p className="mt-1 text-xs text-slate-500">
+                                {meta || "詳細未取得"}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className="text-lg font-black text-slate-900">
+                              {candidate.price !== null
+                                ? `${normalizePriceCurrency(candidate.currency ?? "JPY")} ${Math.round(candidate.price).toLocaleString()}`
+                                : "価格未取得"}
+                            </p>
+                            <div className="mt-3 flex flex-col items-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!flightRecoSheetId) {
+                                    return;
+                                  }
+                                  applyFlightRecommendationToDraft(flightRecoSheetId, candidate);
+                                  setFlightRecoSheetId(null);
+                                }}
+                                className="rounded-full bg-slate-900 px-4 py-2 text-xs font-bold text-white transition hover:bg-slate-800"
+                              >
+                                この便を反映
+                              </button>
+                              {candidate.link ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openExternalLink(candidate.link ?? "")}
+                                  className="text-xs font-semibold text-slate-600 underline underline-offset-4"
+                                >
+                                  Google Flightsを開く
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )
+      : null}
+    </>
   );
 }
 
