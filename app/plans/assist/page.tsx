@@ -59,6 +59,20 @@ type AirportSuggestion = {
   label: string;
 };
 
+type AssistFollowUpQuestion = {
+  id:
+    | "travelStyle"
+    | "transport"
+    | "hotel"
+    | "focus"
+    | "earlyDeparture"
+    | "departureAirport"
+    | "destinationAirport";
+  prompt: string;
+  options: string[];
+  helper?: string;
+};
+
 const INTEREST_OPTIONS = [
   "グルメ",
   "観光名所",
@@ -530,6 +544,97 @@ function normalizeDepartureValue(value: string) {
   return value.trim().replace(/\s+/g, " ");
 }
 
+function appendLineOnce(base: string, line: string) {
+  const normalizedBase = base.trim();
+  const normalizedLine = line.trim();
+  if (!normalizedLine) {
+    return normalizedBase;
+  }
+  if (!normalizedBase) {
+    return normalizedLine;
+  }
+  if (normalizedBase.includes(normalizedLine)) {
+    return normalizedBase;
+  }
+  return `${normalizedBase}\n${normalizedLine}`;
+}
+
+function buildAssistFollowUpQuestions({
+  scope,
+  departure,
+  destination,
+  departureAirportOptions,
+  destinationAirportOptions
+}: {
+  scope: (typeof DESTINATION_SCOPE_OPTIONS)[number];
+  departure: string;
+  destination: string;
+  departureAirportOptions: string[];
+  destinationAirportOptions: string[];
+}) {
+  const transportQuestion: AssistFollowUpQuestion =
+    scope === "国内"
+      ? {
+          id: "transport",
+          prompt: "移動はどれ寄りで考えますか？",
+          helper: "国内旅行なら飛行機寄りか、新幹線寄りかを先に合わせます。",
+          options: ["飛行機寄り", "新幹線寄り", "価格重視", "こだわらない"]
+        }
+      : {
+          id: "transport",
+          prompt: "フライト条件はどれを優先しますか？",
+          helper: "直行便、FSC、価格重視のどれを優先するかで候補便がかなり変わります。",
+          options: ["直行便優先", "FSC優先", "価格重視", "こだわらない"]
+        };
+  const questions: AssistFollowUpQuestion[] = [
+    {
+      id: "travelStyle",
+      prompt: "今回の旅行タイプはどれに近いですか？",
+      helper: "予算の使い方と移動・ホテルの基準をここで決めます。",
+      options: [...TRAVEL_STYLE_OPTIONS]
+    },
+    transportQuestion,
+    {
+      id: "hotel",
+      prompt: "ホテルは何を重視しますか？",
+      helper: "候補ホテルの並び順に効きます。",
+      options: ["駅近重視", "コスパ重視", "高級ホテル重視", "朝食付き重視"]
+    },
+    {
+      id: "focus",
+      prompt: "旅全体の軸はどれですか？",
+      helper: "予定の提案内容をここで絞ります。",
+      options: ["観光メイン", "グルメメイン", "買い物メイン", "バランス重視"]
+    },
+    {
+      id: "earlyDeparture",
+      prompt: "朝早すぎる移動は避けますか？",
+      helper: "候補便や移動時間帯の寄せ方に使います。",
+      options: ["避けたい", "気にしない"]
+    }
+  ];
+
+  if (departureAirportOptions.length > 1) {
+    questions.splice(2, 0, {
+      id: "departureAirport",
+      prompt: `出発空港はどれで考えますか？`,
+      helper: `${departure || "出発地"} は空港候補が複数あります。指定がなければ自動で選びます。`,
+      options: ["自動でOK", ...departureAirportOptions]
+    });
+  }
+
+  if (destinationAirportOptions.length > 1) {
+    questions.splice(3, 0, {
+      id: "destinationAirport",
+      prompt: `到着空港はどれで考えますか？`,
+      helper: `${destination || "目的地"} は空港候補が複数あります。指定がなければ自動で選びます。`,
+      options: ["自動でOK", ...destinationAirportOptions]
+    });
+  }
+
+  return questions;
+}
+
 function readDepartureHistory() {
   if (typeof window === "undefined") {
     return { last: "", history: [] as string[] };
@@ -876,6 +981,11 @@ function AssistCreateContent({ user }: { user: User }) {
   const [returnFlightWarnings, setReturnFlightWarnings] = useState<string[]>([]);
   const [selectedOutboundIndex, setSelectedOutboundIndex] = useState(0);
   const [selectedReturnIndex, setSelectedReturnIndex] = useState(0);
+  const [followUpQuestions, setFollowUpQuestions] = useState<AssistFollowUpQuestion[]>([]);
+  const [followUpAnswers, setFollowUpAnswers] = useState<Record<string, string>>({});
+  const [activeFollowUpIndex, setActiveFollowUpIndex] = useState(0);
+  const [followUpText, setFollowUpText] = useState("");
+  const [followUpOpen, setFollowUpOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const budgetNumber = useMemo(() => {
     const parsed = Number(budget);
@@ -885,6 +995,10 @@ function AssistCreateContent({ user }: { user: User }) {
     () => DESTINATION_SUGGESTIONS.filter((option) => option.scope === destinationScope),
     [destinationScope]
   );
+  const activeFollowUpQuestion = followUpQuestions[activeFollowUpIndex] ?? null;
+  const activeFollowUpAnswer = activeFollowUpQuestion
+    ? followUpAnswers[activeFollowUpQuestion.id] ?? ""
+    : "";
   const departureAirportOptions = useMemo(() => {
     const apiOptions = departureAirportSuggestions.map((item) => item.label);
     return apiOptions.length > 0 ? apiOptions : getAirportOptionsForPlace(departure);
@@ -1037,6 +1151,93 @@ function AssistCreateContent({ user }: { user: User }) {
     setInterests((prev) =>
       prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]
     );
+  };
+
+  const applyFollowUpAnswer = (question: AssistFollowUpQuestion, answer: string) => {
+    const normalizedAnswer = answer.trim();
+    if (!normalizedAnswer) {
+      return;
+    }
+    setFollowUpAnswers((prev) => ({ ...prev, [question.id]: normalizedAnswer }));
+
+    if (question.id === "travelStyle") {
+      if (TRAVEL_STYLE_OPTIONS.includes(normalizedAnswer as (typeof TRAVEL_STYLE_OPTIONS)[number])) {
+        setTravelStyle(normalizedAnswer as (typeof TRAVEL_STYLE_OPTIONS)[number]);
+      }
+      return;
+    }
+
+    if (question.id === "transport") {
+      if (normalizedAnswer === "飛行機寄り") {
+        setTransportModePriority("飛行機優先");
+        setTransportPreference("公共交通優先");
+      } else if (normalizedAnswer === "新幹線寄り") {
+        setTransportModePriority("新幹線優先");
+      } else if (normalizedAnswer === "価格重視") {
+        setRoutePolicy("最安重視");
+        setTravelStyle((current) => (current === "プレミアム" ? "標準" : current));
+      } else if (normalizedAnswer === "直行便優先") {
+        setTransferLimit("乗換1回まで");
+        setNotes((current) => appendLineOnce(current, "直行便優先"));
+      } else if (normalizedAnswer === "FSC優先") {
+        setTravelStyle((current) => (current === "節約" ? "快適" : current));
+        setNotes((current) => appendLineOnce(current, "FSC優先"));
+      }
+      return;
+    }
+
+    if (question.id === "hotel") {
+      setHotelPreference(normalizedAnswer);
+      if (normalizedAnswer === "高級ホテル重視") {
+        setHotelGradePreference("4つ星以上");
+      }
+      return;
+    }
+
+    if (question.id === "departureAirport") {
+      setDepartureAirportPreference(normalizedAnswer === "自動でOK" ? "" : normalizedAnswer);
+      return;
+    }
+
+    if (question.id === "destinationAirport") {
+      setDestinationAirportPreference(normalizedAnswer === "自動でOK" ? "" : normalizedAnswer);
+      return;
+    }
+
+    if (question.id === "focus") {
+      if (normalizedAnswer === "観光メイン") {
+        setInterests(["観光名所", "自然・絶景"]);
+      } else if (normalizedAnswer === "グルメメイン") {
+        setInterests(["グルメ"]);
+      } else if (normalizedAnswer === "買い物メイン") {
+        setInterests(["買い物"]);
+      } else {
+        setInterests(["グルメ", "観光名所"]);
+      }
+      return;
+    }
+
+    if (question.id === "earlyDeparture") {
+      if (normalizedAnswer === "避けたい") {
+        setAvoid((current) => appendLineOnce(current, "朝早すぎる移動は避けたい"));
+        setDepartureTimeBand("昼");
+      }
+    }
+  };
+
+  const beginFollowUpQuestions = () => {
+    const questions = buildAssistFollowUpQuestions({
+      scope: destinationScope,
+      departure,
+      destination,
+      departureAirportOptions,
+      destinationAirportOptions
+    });
+    setFollowUpQuestions(questions);
+    setFollowUpAnswers({});
+    setActiveFollowUpIndex(0);
+    setFollowUpText("");
+    setFollowUpOpen(true);
   };
 
   const requestFlightRecommendations = async ({
@@ -1304,7 +1505,7 @@ function AssistCreateContent({ user }: { user: User }) {
     };
   };
 
-  const handleSubmit = async () => {
+  const continueToFlightSelectionOrPlan = async () => {
     if (!canSubmit) {
       return;
     }
@@ -1336,6 +1537,56 @@ function AssistCreateContent({ user }: { user: User }) {
     } finally {
       setFlightChoiceLoading(false);
     }
+  };
+
+  const handleSubmit = async () => {
+    if (!canSubmit) {
+      return;
+    }
+    setError(null);
+    if (followUpOpen) {
+      return;
+    }
+    if (!followUpOpen && followUpQuestions.length === 0) {
+      beginFollowUpQuestions();
+      return;
+    }
+    await continueToFlightSelectionOrPlan();
+  };
+
+  const handleFollowUpAnswer = (answer: string) => {
+    if (!activeFollowUpQuestion) {
+      return;
+    }
+    applyFollowUpAnswer(activeFollowUpQuestion, answer);
+    setFollowUpText("");
+  };
+
+  const handleFollowUpBack = () => {
+    setFollowUpText("");
+    setActiveFollowUpIndex((current) => Math.max(0, current - 1));
+  };
+
+  const handleFollowUpNext = async () => {
+    if (!activeFollowUpQuestion) {
+      return;
+    }
+    const trimmedInput = followUpText.trim();
+    if (trimmedInput) {
+      applyFollowUpAnswer(activeFollowUpQuestion, trimmedInput);
+      setFollowUpText("");
+    }
+    const resolvedAnswer =
+      trimmedInput || (followUpAnswers[activeFollowUpQuestion.id] ?? "").trim();
+    if (!resolvedAnswer) {
+      return;
+    }
+    if (activeFollowUpIndex >= followUpQuestions.length - 1) {
+      setFollowUpOpen(false);
+      await continueToFlightSelectionOrPlan();
+      return;
+    }
+    setActiveFollowUpIndex((current) => current + 1);
   };
 
   return (
@@ -1387,7 +1638,7 @@ function AssistCreateContent({ user }: { user: User }) {
           </span>
         </div>
         <p className="mt-1 text-xs text-slate-500">
-          まず行き先を決めて、必要最小限の条件だけで初期プランを作成します。細かい調整は作成後に相談できます。
+          最初は最低限の条件だけ入力して、足りない情報は AI が順番に確認します。条件が揃ったら候補便と初期プランを作成します。
         </p>
 
         <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
@@ -1509,66 +1760,6 @@ function AssistCreateContent({ user }: { user: User }) {
               </div>
             </div>
           </label>
-          <div className="text-xs font-semibold text-slate-600 sm:col-span-2">
-            旅行タイプ
-            <div className="mt-1.5 grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {TRAVEL_STYLE_OPTIONS.map((option) => {
-                const active = travelStyle === option;
-                return (
-                  <button
-                    key={option}
-                    type="button"
-                    onClick={() => setTravelStyle(option)}
-                    className={`rounded-2xl border px-3 py-3 text-left transition ${
-                      active
-                        ? "border-slate-900 bg-slate-900 text-white shadow-[0_10px_24px_-18px_rgba(15,23,42,0.8)]"
-                        : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
-                    }`}
-                  >
-                    <p className="text-sm font-bold">{option}</p>
-                    <p
-                      className={`mt-1 text-[11px] leading-5 ${
-                        active ? "text-white/80" : "text-slate-500"
-                      }`}
-                    >
-                      {option === "節約"
-                        ? "LCCや価格優先"
-                        : option === "快適"
-                          ? "FSC寄りで移動を楽に"
-                          : option === "プレミアム"
-                            ? "FSCと高級ホテル寄り"
-                            : "価格と快適性のバランス"}
-                    </p>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <div className="text-xs font-semibold text-slate-600 sm:col-span-2">
-            フライト希望時刻
-            <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
-              <TimeSliderField
-                label="往路の出発"
-                value={outboundPreferredDepartureTime}
-                onChange={setOutboundPreferredDepartureTime}
-              />
-              <TimeSliderField
-                label="往路の到着"
-                value={outboundPreferredArrivalTime}
-                onChange={setOutboundPreferredArrivalTime}
-              />
-              <TimeSliderField
-                label="復路の出発"
-                value={returnPreferredDepartureTime}
-                onChange={setReturnPreferredDepartureTime}
-              />
-              <TimeSliderField
-                label="復路の到着"
-                value={returnPreferredArrivalTime}
-                onChange={setReturnPreferredArrivalTime}
-              />
-            </div>
-          </div>
           <label className="text-xs font-semibold text-slate-600">
             出発地
             <input
@@ -1577,34 +1768,10 @@ function AssistCreateContent({ user }: { user: User }) {
               placeholder="例: 東京、福岡"
               className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-900 outline-none transition focus:border-sky-300"
             />
-            {departureAirportOptions.length > 0 ? (
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDepartureAirportPreference("")}
-                  className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
-                    !departureAirportPreference
-                      ? "bg-slate-900 text-white"
-                      : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                  }`}
-                >
-                  自動
-                </button>
-                {departureAirportOptions.map((option) => (
-                  <button
-                    key={option}
-                    type="button"
-                    onClick={() => setDepartureAirportPreference(option)}
-                    className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
-                      departureAirportPreference === option
-                        ? "bg-slate-900 text-white"
-                        : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                    }`}
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
+            {departureAirportPreference ? (
+              <p className="mt-2 text-[11px] font-semibold text-slate-500">
+                出発空港: {departureAirportPreference}
+              </p>
             ) : null}
             {departureHistory.length > 0 ? (
               <div className="mt-2 flex flex-wrap gap-2">
@@ -1633,34 +1800,10 @@ function AssistCreateContent({ user }: { user: User }) {
               placeholder="例: 2"
               className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-900 outline-none transition focus:border-sky-300"
             />
-            {destinationAirportOptions.length > 0 ? (
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setDestinationAirportPreference("")}
-                  className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
-                    !destinationAirportPreference
-                      ? "bg-slate-900 text-white"
-                      : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                  }`}
-                >
-                  自動
-                </button>
-                {destinationAirportOptions.map((option) => (
-                  <button
-                    key={option}
-                    type="button"
-                    onClick={() => setDestinationAirportPreference(option)}
-                    className={`rounded-full px-3 py-1 text-[11px] font-semibold transition ${
-                      destinationAirportPreference === option
-                        ? "bg-slate-900 text-white"
-                        : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                    }`}
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
+            {destinationAirportPreference ? (
+              <p className="mt-2 text-[11px] font-semibold text-slate-500">
+                到着空港: {destinationAirportPreference}
+              </p>
             ) : null}
           </label>
         </div>
@@ -1676,6 +1819,68 @@ function AssistCreateContent({ user }: { user: User }) {
           </button>
           {showAdvanced ? (
             <div className="space-y-3 border-t border-slate-200 px-3 py-3">
+              <div className="text-xs font-semibold text-slate-600">
+                旅行タイプ
+                <div className="mt-1.5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {TRAVEL_STYLE_OPTIONS.map((option) => {
+                    const active = travelStyle === option;
+                    return (
+                      <button
+                        key={option}
+                        type="button"
+                        onClick={() => setTravelStyle(option)}
+                        className={`rounded-2xl border px-3 py-3 text-left transition ${
+                          active
+                            ? "border-slate-900 bg-slate-900 text-white shadow-[0_10px_24px_-18px_rgba(15,23,42,0.8)]"
+                            : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                        }`}
+                      >
+                        <p className="text-sm font-bold">{option}</p>
+                        <p
+                          className={`mt-1 text-[11px] leading-5 ${
+                            active ? "text-white/80" : "text-slate-500"
+                          }`}
+                        >
+                          {option === "節約"
+                            ? "LCCや価格優先"
+                            : option === "快適"
+                              ? "FSC寄りで移動を楽に"
+                              : option === "プレミアム"
+                                ? "FSCと高級ホテル寄り"
+                                : "価格と快適性のバランス"}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="text-xs font-semibold text-slate-600">
+                フライト希望時刻
+                <div className="mt-1.5 grid gap-2 sm:grid-cols-2">
+                  <TimeSliderField
+                    label="往路の出発"
+                    value={outboundPreferredDepartureTime}
+                    onChange={setOutboundPreferredDepartureTime}
+                  />
+                  <TimeSliderField
+                    label="往路の到着"
+                    value={outboundPreferredArrivalTime}
+                    onChange={setOutboundPreferredArrivalTime}
+                  />
+                  <TimeSliderField
+                    label="復路の出発"
+                    value={returnPreferredDepartureTime}
+                    onChange={setReturnPreferredDepartureTime}
+                  />
+                  <TimeSliderField
+                    label="復路の到着"
+                    value={returnPreferredArrivalTime}
+                    onChange={setReturnPreferredArrivalTime}
+                  />
+                </div>
+              </div>
+
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="text-xs font-semibold text-slate-600">
                   同行者タイプ
@@ -1897,7 +2102,7 @@ function AssistCreateContent({ user }: { user: User }) {
           </button>
           <button
             type="button"
-            disabled={!canSubmit}
+            disabled={!canSubmit || followUpOpen}
             onClick={handleSubmit}
             className="rounded-full bg-slate-900 px-5 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -1905,9 +2110,9 @@ function AssistCreateContent({ user }: { user: User }) {
               ? "AIで作成中..."
               : flightChoiceLoading
                 ? "候補便を取得中..."
-                : shouldPromptFlightSelection
-                  ? "候補便を確認して作成"
-                  : "AIでざっくり作成"}
+                : followUpOpen
+                  ? "回答後に候補便を取得"
+                  : "AIに確認しながら開始"}
           </button>
         </div>
       </div>
@@ -1977,11 +2182,18 @@ function AssistCreateContent({ user }: { user: User }) {
                             .filter(Boolean)
                             .join(" / ");
                           return (
-                            <button
+                            <div
                               key={`assist-outbound-flight-${index}`}
-                              type="button"
+                              role="button"
+                              tabIndex={0}
                               onClick={() => setSelectedOutboundIndex(index)}
-                              className={`w-full rounded-3xl border p-4 text-left transition ${
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  setSelectedOutboundIndex(index);
+                                }
+                              }}
+                              className={`w-full cursor-pointer rounded-3xl border p-4 text-left transition ${
                                 selected
                                   ? "border-slate-900 bg-slate-900 text-white shadow-[0_18px_36px_-18px_rgba(15,23,42,0.8)]"
                                   : "border-slate-200 bg-white hover:border-slate-300"
@@ -2042,7 +2254,7 @@ function AssistCreateContent({ user }: { user: User }) {
                                   ) : null}
                                 </div>
                               </div>
-                            </button>
+                            </div>
                           );
                         })
                       )}
@@ -2084,11 +2296,18 @@ function AssistCreateContent({ user }: { user: User }) {
                             .filter(Boolean)
                             .join(" / ");
                           return (
-                            <button
+                            <div
                               key={`assist-return-flight-${index}`}
-                              type="button"
+                              role="button"
+                              tabIndex={0}
                               onClick={() => setSelectedReturnIndex(index)}
-                              className={`w-full rounded-3xl border p-4 text-left transition ${
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  setSelectedReturnIndex(index);
+                                }
+                              }}
+                              className={`w-full cursor-pointer rounded-3xl border p-4 text-left transition ${
                                 selected
                                   ? "border-slate-900 bg-slate-900 text-white shadow-[0_18px_36px_-18px_rgba(15,23,42,0.8)]"
                                   : "border-slate-200 bg-white hover:border-slate-300"
@@ -2149,7 +2368,7 @@ function AssistCreateContent({ user }: { user: User }) {
                                   ) : null}
                                 </div>
                               </div>
-                            </button>
+                            </div>
                           );
                         })
                       )}
@@ -2185,6 +2404,109 @@ function AssistCreateContent({ user }: { user: User }) {
                   >
                     この便で続ける
                   </button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+      {followUpOpen && activeFollowUpQuestion && typeof window !== "undefined"
+        ? createPortal(
+            <div className="fixed inset-0 z-[1350] flex items-center justify-center bg-slate-950/35 p-4 backdrop-blur-[2px]">
+              <div className="w-full max-w-xl overflow-hidden rounded-[28px] border border-white/70 bg-white shadow-[0_28px_80px_-28px_rgba(15,23,42,0.45)]">
+                <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500">
+                      AI CHECK
+                    </p>
+                    <h3 className="mt-1 text-xl font-black tracking-[-0.02em] text-slate-900">
+                      AIが次に確認したいこと
+                    </h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      必要な質問だけ順番に聞いてから、候補便と初期プランを作ります。
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold text-slate-600">
+                    {activeFollowUpIndex + 1} / {followUpQuestions.length}
+                  </span>
+                </div>
+                <div className="px-5 py-5">
+                  <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+                    <p className="text-lg font-bold text-slate-900">{activeFollowUpQuestion.prompt}</p>
+                    {activeFollowUpQuestion.helper ? (
+                      <p className="mt-2 text-sm leading-6 text-slate-500">
+                        {activeFollowUpQuestion.helper}
+                      </p>
+                    ) : null}
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {activeFollowUpQuestion.options.map((option) => (
+                        <button
+                          key={`${activeFollowUpQuestion.id}-${option}`}
+                          type="button"
+                          onClick={() => handleFollowUpAnswer(option)}
+                          className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                            activeFollowUpAnswer === option
+                              ? "border-slate-900 bg-slate-900 text-white"
+                              : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                          }`}
+                        >
+                          {option}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                      <input
+                        value={followUpText}
+                        onChange={(event) => setFollowUpText(event.target.value)}
+                        placeholder="自由入力でも回答できます"
+                        className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-medium text-slate-900 outline-none transition focus:border-sky-300"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!followUpText.trim()) {
+                              return;
+                            }
+                            handleFollowUpAnswer(followUpText);
+                          }}
+                          className="rounded-full bg-slate-900 px-4 py-3 text-xs font-semibold text-white transition hover:bg-slate-800"
+                        >
+                          回答を保存
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleFollowUpAnswer("こだわらない")}
+                          className="rounded-full border border-slate-300 bg-white px-4 py-3 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                          こだわらない
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex items-center justify-between gap-3">
+                    <p className="text-xs font-semibold text-slate-500">
+                      回答済み {Object.keys(followUpAnswers).length} 件
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleFollowUpBack}
+                        disabled={activeFollowUpIndex === 0}
+                        className="rounded-full border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        戻る
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleFollowUpNext()}
+                        disabled={!(followUpText.trim() || activeFollowUpAnswer.trim())}
+                        className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                      >
+                        {activeFollowUpIndex >= followUpQuestions.length - 1 ? "候補便へ進む" : "次へ"}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>,

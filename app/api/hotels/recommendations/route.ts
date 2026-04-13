@@ -926,17 +926,28 @@ function extractSerpHotelRecommendations(
         sanitizeHotelAddress(property.neighborhood)
       ].filter(Boolean);
       const address = addressParts.length > 0 ? addressParts.join(", ") : null;
-      const searchQuery = buildHotelSearchQuery(name, query, address);
+      const hotelSearchQuery = buildHotelSearchQuery(name, query, address);
       const link =
         buildPublicGoogleHotelsUrl({
-          query: searchQuery || name,
+          query: hotelSearchQuery || query,
           checkIn,
           checkOut,
           adults,
           currency: currency || hotelCurrency || DEFAULT_CURRENCY,
           locale,
           gl
-        }) || fallbackLink || null;
+        }) ||
+        fallbackLink ||
+        buildPublicGoogleHotelsUrl({
+          query,
+          checkIn,
+          checkOut,
+          adults,
+          currency: currency || hotelCurrency || DEFAULT_CURRENCY,
+          locale,
+          gl
+        }) ||
+        null;
 
       return {
         name,

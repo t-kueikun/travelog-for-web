@@ -7197,7 +7197,7 @@ function PlanDetailContent({ user }: { user: User }) {
                               />
                             </label>
                             <label className="mt-3 block text-xs font-semibold text-slate-500">
-                              予約リンク
+                              Google Hotelsリンク
                               <div className="mt-2 flex items-center gap-2">
                                 <input
                                   value={draft.link.value}
@@ -7230,10 +7230,13 @@ function PlanDetailContent({ user }: { user: User }) {
                                     onClick={() => openExternalLink(draft.link.value)}
                                     className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                                   >
-                                    開く
+                                    Google Hotelsで見る
                                   </button>
                                 ) : null}
                               </div>
+                              <p className="mt-2 text-[11px] font-normal text-slate-400">
+                                Google Hotels上では、日付表示が一部異なる場合があります。
+                              </p>
                             </label>
                             </div>
                           </SwipeDeleteCard>
@@ -7302,8 +7305,13 @@ function PlanDetailContent({ user }: { user: User }) {
                               rel="noopener noreferrer"
                               className="text-slate-900 underline underline-offset-4"
                             >
-                              予約リンクを開く
+                              Google Hotelsで見る
                             </a>
+                          ) : null}
+                          {linkHref ? (
+                            <p className="text-[11px] text-slate-400">
+                              Google Hotels上では、日付表示が一部異なる場合があります。
+                            </p>
                           ) : null}
                         </div>
                       </div>

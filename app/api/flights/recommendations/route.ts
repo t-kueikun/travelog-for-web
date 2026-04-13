@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveAirportsFromQuery } from "@/lib/airport-search";
 
 export const runtime = "nodejs";
 
@@ -572,6 +573,19 @@ async function resolveAirportCode({
   if (looksLikeIataCode(fallbackCode) && !METRO_AIRPORT_CODES.has(fallbackCode)) {
     return {
       candidate: { code: fallbackCode.toUpperCase(), name: fallbackCode.toUpperCase() },
+      failure: null as UpstreamResult | null
+    };
+  }
+
+  const localMatches = await resolveAirportsFromQuery(query, 6);
+  if (localMatches.airports.length > 0) {
+    const best = localMatches.airports[0];
+    return {
+      candidate: {
+        code: best.code,
+        name: best.name,
+        cityName: best.cityName
+      },
       failure: null as UpstreamResult | null
     };
   }

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { searchAirportMaster } from "@/lib/airport-master";
+import { resolveAirportsFromQuery } from "@/lib/airport-search";
 
 export const runtime = "nodejs";
 
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
   const limit = Math.max(1, Math.min(8, Math.floor(Number(body.limit) || 5)));
 
   try {
-    const airports = await searchAirportMaster(query, limit);
+    const { airports } = await resolveAirportsFromQuery(query, limit);
     return NextResponse.json({
       airports: airports.map((airport) => ({
         code: airport.code,

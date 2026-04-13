@@ -15,6 +15,26 @@ export type AirportMasterRecord = {
 
 let airportMasterCache: Promise<AirportMasterRecord[]> | null = null;
 
+const AIRPORT_QUERY_ALIASES: Record<string, string[]> = {
+  東京: ["tokyo", "haneda", "narita", "hnd", "nrt"],
+  大阪: ["osaka", "itami", "kansai", "kobe", "itm", "kix", "ukb"],
+  札幌: ["sapporo", "chitose", "cts"],
+  ソウル: ["seoul", "incheon", "gimpo", "icn", "gmp"],
+  台北: ["taipei", "taoyuan", "songshan", "tpe", "tsa"],
+  バンコク: ["bangkok", "suvarnabhumi", "don mueang", "bkk", "dmk"],
+  シンガポール: ["singapore", "changi", "sin"],
+  ローマ: ["rome", "fiumicino", "ciampino", "fco", "cia"],
+  カイロ: ["cairo", "cai", "sphinx", "spx", "egypt"],
+  サンフランシスコ: ["san francisco", "sfo"],
+  ニューヨーク: ["new york", "jfk", "ewr", "lga"],
+  ロンドン: ["london", "heathrow", "gatwick", "lhr", "lgw"],
+  パリ: ["paris", "charles de gaulle", "orly", "cdg", "ory"],
+  香港: ["hong kong", "hkg"],
+  那覇: ["naha", "okinawa", "oka"],
+  福岡: ["fukuoka", "fuk", "hakata"],
+  京都: ["kyoto", "itami", "kansai", "itm", "kix"]
+};
+
 function cleanString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -66,6 +86,32 @@ function buildCountryName(countryCode: string) {
   } catch {
     return normalized;
   }
+}
+
+function buildQueryVariants(query: string) {
+  const normalized = cleanString(query);
+  if (!normalized) {
+    return [] as string[];
+  }
+  const variants: string[] = [];
+  const push = (value: string) => {
+    const next = cleanString(value);
+    if (!next || variants.includes(next)) {
+      return;
+    }
+    variants.push(next);
+  };
+
+  push(normalized);
+  push(normalized.toLowerCase());
+
+  for (const [alias, related] of Object.entries(AIRPORT_QUERY_ALIASES)) {
+    if (normalized.includes(alias)) {
+      related.forEach(push);
+    }
+  }
+
+  return variants;
 }
 
 function scoreAirportRecord(record: AirportMasterRecord, query: string) {
@@ -189,11 +235,38 @@ export async function searchAirportMaster(query: string, limit = 5) {
   if (!normalizedQuery) {
     return [] as AirportMasterRecord[];
   }
+  return searchAirportMasterWithQueries({
+    queries: [normalizedQuery],
+    limit
+  });
+}
+
+export async function searchAirportMasterWithQueries({
+  queries,
+  preferredCodes = [],
+  limit = 5
+}: {
+  queries: string[];
+  preferredCodes?: string[];
+  limit?: number;
+}) {
+  const normalizedQueries = queries.map((query) => cleanString(query)).filter(Boolean);
+  if (normalizedQueries.length === 0) {
+    return [] as AirportMasterRecord[];
+  }
+  const queryVariants = normalizedQueries.flatMap((query) => buildQueryVariants(query));
+  const preferredCodeSet = new Set(
+    preferredCodes.map((code) => cleanString(code).toUpperCase()).filter(looksLikeIataCode)
+  );
   const airports = await getAirportMaster();
   return airports
     .map((record) => ({
       record,
-      score: scoreAirportRecord(record, normalizedQuery)
+      score:
+        queryVariants.reduce(
+        (best, variant) => Math.max(best, scoreAirportRecord(record, variant)),
+        0
+      ) + (preferredCodeSet.has(record.code) ? 240 : 0)
     }))
     .filter((item) => item.score > 0)
     .sort((a, b) => {
