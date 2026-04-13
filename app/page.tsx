@@ -130,12 +130,16 @@ function splitPlansByTimeline(items: TravelPlan[]) {
   };
 }
 
-function MyLogContent({ user }: { user: User }) {
-  const router = useRouter();
+function MyLogContent({
+  user,
+  creationError
+}: {
+  user: User;
+  creationError: string | null;
+}) {
   const [plans, setPlans] = useState<TravelPlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
   const [timelineView, setTimelineView] = useState<"upcoming" | "past">("upcoming");
   const sortedPlans = useMemo(() => sortPlansBySchedule(plans), [plans]);
   const visiblePlans = useMemo(
@@ -185,77 +189,56 @@ function MyLogContent({ user }: { user: User }) {
 
   return (
     <div className="space-y-4">
-      <button
-        type="button"
-        disabled={creating}
-        onClick={async () => {
-          setCreating(true);
-          setError(null);
-          try {
-            const path = await createPlan(user.uid);
-            router.push(`/plans/${encodeURIComponent(path)}`);
-          } catch (err) {
-            setError("新しいLogの作成に失敗しました。");
-            console.error(err);
-          } finally {
-            setCreating(false);
-          }
-        }}
-        className="w-full rounded-2xl border border-dashed border-slate-200 bg-white py-4 text-sm font-semibold text-slate-600 shadow-cardSoft transition hover:bg-slate-50 disabled:opacity-60"
-      >
-        {creating ? "作成中..." : "新しいLogを作成"}
-      </button>
-      <div className="flex justify-end">
-        <button
-          type="button"
-          onClick={() => router.push("/plans/assist")}
-          className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
-        >
-          旅行アシスト（ベータ）を開く
-        </button>
+      <div className="rounded-[1.4rem] border border-white/70 bg-white/60 px-3.5 py-2.5 text-[11px] font-semibold text-slate-500 shadow-[0_16px_34px_-28px_rgba(15,23,42,0.4)] backdrop-blur-md">
+        旅の予定をカードで一覧化。新規作成は右上の `+`、AI作成は下部タブから開けます。
       </div>
-      {error ? (
-        <div className="rounded-2xl bg-white p-4 text-sm text-rose-500 shadow-cardSoft">
-          {error}
+      {creationError || error ? (
+        <div className="rounded-[1.4rem] bg-white p-3.5 text-sm text-rose-500 shadow-[0_16px_34px_-28px_rgba(15,23,42,0.4)]">
+          {creationError ?? error}
         </div>
       ) : null}
       {loading ? (
-        <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-cardSoft">
+        <div className="rounded-[1.4rem] bg-white p-3.5 text-sm text-slate-500 shadow-[0_16px_34px_-28px_rgba(15,23,42,0.4)]">
           読み込み中...
         </div>
       ) : visiblePlans.length === 0 ? (
-        <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-cardSoft">
-          まだ旅行プランがありません。
+        <div className="rounded-[1.7rem] border border-[rgba(199,210,224,0.95)] bg-[#fffdfa] p-4 shadow-[7px_9px_0_rgba(190,205,222,0.88)]">
+          <p className="text-base font-semibold text-slate-900">まだ旅行プランがありません。</p>
+          <p className="mt-2 text-sm text-slate-500">
+            右上の `+` から新しいLogを作成できます。
+          </p>
         </div>
       ) : (
-        <div className="space-y-6">
-          <div className="flex gap-2">
-            {[
-              { key: "upcoming" as const, label: "今後の旅行", count: planSections.upcoming.length },
-              { key: "past" as const, label: "これまでの旅行", count: planSections.past.length }
-            ].map((option) => {
-              const active = timelineView === option.key;
-              return (
-                <button
-                  key={option.key}
-                  type="button"
-                  onClick={() => setTimelineView(option.key)}
-                  className={`rounded-full px-4 py-2 text-sm font-semibold transition ${
-                    active
-                      ? "bg-slate-900 text-white"
-                      : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                  }`}
-                >
-                  {option.label}
-                  <span className={`ml-2 text-xs ${active ? "text-white/80" : "text-slate-400"}`}>
-                    {option.count}件
-                  </span>
-                </button>
-              );
-            })}
+        <div className="space-y-5">
+          <div className="rounded-full border border-white/80 bg-white/80 p-1 shadow-[0_12px_28px_-22px_rgba(15,23,42,0.45)] backdrop-blur-xl">
+            <div className="grid grid-cols-2 gap-1">
+              {[
+                { key: "upcoming" as const, label: "今後の旅行", count: planSections.upcoming.length },
+                { key: "past" as const, label: "これまでの旅行", count: planSections.past.length }
+              ].map((option) => {
+                const active = timelineView === option.key;
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => setTimelineView(option.key)}
+                    className={`rounded-full px-3 py-1.5 text-[13px] font-semibold transition ${
+                      active
+                        ? "bg-[#dbe4ec] text-slate-900"
+                        : "text-slate-500 hover:text-slate-700"
+                    }`}
+                  >
+                    {option.label}
+                      <span className={`ml-1.5 text-[10px] ${active ? "text-slate-600" : "text-slate-400"}`}>
+                        {option.count}件
+                      </span>
+                    </button>
+                );
+              })}
+            </div>
           </div>
 
-          <section className="space-y-3">
+          <section className="space-y-3.5">
             {activePlans.length > 0 ? (
               activePlans.map((plan) => (
                 <PlanRow
@@ -289,7 +272,7 @@ function MyLogContent({ user }: { user: User }) {
                 />
               ))
             ) : (
-              <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-cardSoft">
+              <div className="rounded-[1.4rem] bg-white p-3.5 text-sm text-slate-500 shadow-[0_16px_34px_-28px_rgba(15,23,42,0.4)]">
                 {timelineView === "upcoming" ? "予定中の旅行はありません。" : "過去の旅行はありません。"}
               </div>
             )}
@@ -300,14 +283,55 @@ function MyLogContent({ user }: { user: User }) {
   );
 }
 
+function MyLogPageInner({ user }: { user: User }) {
+  const router = useRouter();
+  const [creating, setCreating] = useState(false);
+  const [creationError, setCreationError] = useState<string | null>(null);
+
+  const handleCreate = async () => {
+    if (creating) {
+      return;
+    }
+    setCreating(true);
+    setCreationError(null);
+    try {
+      const path = await createPlan(user.uid);
+      router.push(`/plans/${encodeURIComponent(path)}`);
+    } catch (err) {
+      setCreationError("新しいLogの作成に失敗しました。");
+      console.error(err);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <PageShell
+      title="MyLog"
+      showSettings
+      headerRight={
+        <button
+          type="button"
+          onClick={() => void handleCreate()}
+          disabled={creating}
+          aria-label="新しいLogを作成"
+          className="flex h-10 w-10 items-center justify-center rounded-full border border-white/80 bg-white/80 text-slate-700 shadow-[0_10px_22px_-18px_rgba(15,23,42,0.45)] backdrop-blur-md transition hover:bg-white disabled:opacity-50"
+        >
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 5.25v13.5M5.25 12h13.5" />
+          </svg>
+        </button>
+      }
+    >
+      <MyLogContent user={user} creationError={creationError} />
+    </PageShell>
+  );
+}
+
 export default function MyLogPage() {
   return (
     <AuthGate>
-      {(user) => (
-        <PageShell title="MyLog">
-          <MyLogContent user={user} />
-        </PageShell>
-      )}
+      {(user) => <MyLogPageInner user={user} />}
     </AuthGate>
   );
 }

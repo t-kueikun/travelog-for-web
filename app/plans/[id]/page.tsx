@@ -10,7 +10,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type { User } from "firebase/auth";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import AuthGate from "@/components/AuthGate";
 import PageShell from "@/components/PageShell";
 import TripOverviewMapCanvas from "@/components/TripOverviewMapCanvas";
@@ -1963,9 +1963,9 @@ function applySavingsDrafts(drafts: SavingsDraft[]) {
 
 function InfoRow({ label, value }: { label: string; value?: string }) {
   return (
-    <div className="flex items-center justify-between gap-4 py-3 text-sm">
-      <span className="font-medium text-slate-500">{label}</span>
-      <span className="text-right text-base font-semibold text-slate-900">
+    <div className="flex items-center justify-between gap-4 text-sm">
+      <span className="font-semibold text-slate-400">{label}</span>
+      <span className="text-right text-[1.05rem] font-semibold text-slate-800">
         {value && value.length > 0 ? value : "—"}
       </span>
     </div>
@@ -1974,7 +1974,7 @@ function InfoRow({ label, value }: { label: string; value?: string }) {
 
 function SectionTitle({ title }: { title: string }) {
   return (
-    <h3 className="text-sm font-semibold tracking-wide text-slate-500">
+    <h3 className="text-[1.5rem] font-semibold tracking-tight text-slate-900">
       {title}
     </h3>
   );
@@ -3404,6 +3404,7 @@ function SwipeDeleteCard({
 
 function PlanDetailContent({ user }: { user: User }) {
   const params = useParams();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const planParam = typeof params?.id === "string" ? params.id : "";
   const { planPath, planId } = resolvePlanParam(planParam);
@@ -5373,7 +5374,22 @@ function PlanDetailContent({ user }: { user: User }) {
 
   return (
     <>
-    <PageShell title={plan?.name || "プラン詳細"}>
+    <PageShell
+      title="Log詳細"
+      showSettings={false}
+      headerLeft={
+        <button
+          type="button"
+          onClick={() => router.back()}
+          aria-label="前の画面へ戻る"
+          className="flex h-10 w-10 items-center justify-center rounded-full border border-white/80 bg-white/80 text-slate-700 shadow-[0_10px_22px_-18px_rgba(15,23,42,0.45)] backdrop-blur-md transition hover:bg-white"
+        >
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 19.5-7.5-7.5 7.5-7.5" />
+          </svg>
+        </button>
+      }
+    >
       <div className="space-y-6">
         {planError ? (
           <div className="rounded-2xl bg-white p-4 text-sm text-rose-500 shadow-cardSoft">
@@ -5385,33 +5401,35 @@ function PlanDetailContent({ user }: { user: User }) {
             読み込み中...
           </div>
         ) : plan ? (
-          <div className="rounded-2xl bg-white p-5 shadow-cardSoft">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-semibold text-slate-900">
-                  {plan.name || "Untitled"}
-                </h2>
-                <p className="text-sm text-slate-500">
-                  {plan.destination || "Destination"}
-                </p>
-              </div>
-              <div className="text-right text-xs text-slate-500">
-                <span className="block text-base font-semibold text-slate-900">
-                  {typeof plan.commentsCount === "number" ? plan.commentsCount : 0}
-                </span>
-                コメント
-              </div>
+          <div className="rounded-[1.7rem] border border-[rgba(199,210,224,0.95)] bg-[#fffdfa] p-5 shadow-[7px_9px_0_rgba(190,205,222,0.88)]">
+            <h2 className="text-[1.8rem] font-semibold leading-[1.16] tracking-tight text-slate-900">
+              {plan.name || "Untitled"}
+            </h2>
+            <div className="mt-4 space-y-2.5">
+              <InfoRow
+                label="日程"
+                value={
+                  [formatDate(plan.startDate), formatDate(plan.endDate)]
+                    .filter(Boolean)
+                    .join(" - ") || ""
+                }
+              />
+              <InfoRow label="行き先" value={plan.destination || ""} />
+              <InfoRow
+                label="合計費用"
+                value={typeof totalCost === "number" ? formatYen(totalCost) : ""}
+              />
             </div>
-            <div className="mt-4">
-              <div className="flex items-center justify-between text-xs text-slate-500">
-                <span>
-                  {progress ? `あと ${formatYen(progress.remaining)}` : "あと —"}
+            <div className="mt-5">
+              <div className="flex items-center justify-between text-[13px] font-semibold text-slate-500">
+                <span>準備状況</span>
+                <span className="text-slate-700">
+                  {progress ? `残り ${formatYen(progress.remaining)}` : "残り —"}
                 </span>
-                <span>{progress ? `${progress.percent}%` : "—"}</span>
               </div>
-              <div className="mt-2 h-2 rounded-full bg-slate-100">
+              <div className="mt-3 h-2 rounded-full bg-slate-200/80">
                 <div
-                  className="h-2 rounded-full bg-slate-900/80"
+                  className="h-full rounded-full bg-slate-400"
                   style={{ width: `${progress ? progress.percent : 0}%` }}
                 />
               </div>

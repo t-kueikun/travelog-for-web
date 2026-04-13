@@ -3,12 +3,14 @@
 @tailwind utilities;
 
 :root {
-  --chrome: #eef2f6;
-  --chrome-deep: #dfe8f1;
+  --chrome: #edf2f7;
+  --chrome-deep: #e1e8f0;
   --surface: rgba(255, 255, 255, 0.84);
   --ink: #0f172a;
   --accent: #0ea5e9;
   --accent-soft: #22d3ee;
+  --panel-shadow: 8px 10px 0 rgba(190, 205, 222, 0.9);
+  --panel-border: rgba(199, 210, 224, 0.9);
 }
 
 * {
@@ -109,6 +111,12 @@ select {
     background-color: var(--surface);
     border: 1px solid rgba(148, 163, 184, 0.22);
     backdrop-filter: blur(14px);
+  }
+
+  .panel-soft {
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid var(--panel-border);
+    box-shadow: var(--panel-shadow);
   }
 
   .glass-surface {

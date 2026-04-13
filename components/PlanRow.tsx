@@ -117,6 +117,46 @@ function getScheduleLabel(plan: TravelPlan) {
   return "";
 }
 
+function toDate(value: TravelPlan["startDate"] | TravelPlan["endDate"]) {
+  if (!value) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  if ("toDate" in value && typeof value.toDate === "function") {
+    const parsed = value.toDate();
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
+}
+
+function getDepartureLabel(plan: TravelPlan) {
+  const start = toDate(plan.startDate);
+  if (!start) {
+    return "日程未定";
+  }
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const target = new Date(
+    start.getFullYear(),
+    start.getMonth(),
+    start.getDate()
+  ).getTime();
+  const diff = Math.round((target - today) / 86400000);
+  if (diff > 0) {
+    return `出発まで\n${diff} days`;
+  }
+  if (diff === 0) {
+    return "今日出発";
+  }
+  return `${Math.abs(diff)} days前`;
+}
+
 type PlanRowProps = {
   plan: TravelPlan;
   canDelete?: boolean;
@@ -144,6 +184,7 @@ export default function PlanRow({
   const commentsCount = typeof plan.commentsCount === "number" ? plan.commentsCount : 0;
   const encodedPath = encodeURIComponent(plan.path);
   const scheduleLabel = getScheduleLabel(plan);
+  const departureLabel = getDepartureLabel(plan);
   const isArchived = plan.archived === true;
 
   const isRowActionTarget = (target: EventTarget | null) => {
@@ -249,38 +290,45 @@ export default function PlanRow({
             openPlan();
           }
         }}
-        className="relative z-10 rounded-2xl card-surface p-4 shadow-cardSoft transition-transform hover:shadow-card duration-200 ease-out interactive-shadow will-change-transform"
+        className="relative z-10 rounded-[1.7rem] border border-[rgba(199,210,224,0.95)] bg-[#fffdfa] px-4 py-3.5 shadow-[7px_9px_0_rgba(190,205,222,0.88)] transition-transform duration-200 ease-out hover:shadow-[9px_12px_0_rgba(190,205,222,0.92)] interactive-shadow will-change-transform"
         style={{ transform: `translateX(${translateX}px)`, touchAction: "pan-y" }}
       >
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h3 className="text-lg font-semibold text-slate-900">
+        <div className="flex items-start gap-4">
+          <div className="min-w-0 flex-1">
+            {scheduleLabel ? (
+              <p className="text-[11px] font-semibold tracking-wide text-slate-600">
+                {scheduleLabel}
+              </p>
+            ) : null}
+            <h3 className="mt-1 line-clamp-2 text-[1.5rem] font-semibold leading-[1.12] tracking-tight text-slate-900">
               {plan.name || "Untitled"}
             </h3>
-            <p className="text-sm text-slate-500">
+            <p className="mt-1 text-[13px] font-semibold text-slate-600">
               {plan.destination || "Destination"}
             </p>
-            {scheduleLabel ? (
-              <p className="mt-0.5 text-xs font-medium text-slate-500">{scheduleLabel}</p>
-            ) : null}
           </div>
-          <div className="text-right text-xs text-slate-500">
-            <span className="block text-base font-semibold text-slate-900">
-              {commentsCount}
+          <div className="min-w-[5.8rem] border-l border-dashed border-slate-300 pl-3 text-right text-[11px] font-semibold whitespace-pre-line text-slate-700">
+            {departureLabel}
+            <span className="mt-2 block text-[11px] font-medium text-slate-400">
+              {commentsCount > 0 ? `${commentsCount} comments` : ""}
             </span>
-            コメント
           </div>
         </div>
-        <div className="mt-4">
-          <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>{progress.remainingLabel}</span>
-            <span>{progress.progressLabel}</span>
+        <div className="mt-4 flex items-end gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-3 text-[11px] font-semibold text-slate-500">
+              <span className="truncate">{progress.remainingLabel}</span>
+              <span>{progress.progressLabel}</span>
+            </div>
+            <div className="mt-2 h-2 rounded-full border border-slate-300 bg-white">
+              <div
+                className="h-full rounded-full bg-slate-400"
+                style={{ width: `${progress.percent}%` }}
+              />
+            </div>
           </div>
-          <div className="mt-2 h-2 rounded-full bg-slate-100">
-            <div
-              className="h-2 rounded-full bg-slate-900/80"
-              style={{ width: `${progress.percent}%` }}
-            />
+          <div className="rounded-[1rem] bg-[#c6d6e7] px-4 py-1.5 text-[13px] font-bold text-slate-800">
+            詳細
           </div>
         </div>
         {canArchive && onArchive ? (

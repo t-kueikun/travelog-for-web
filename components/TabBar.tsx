@@ -4,32 +4,65 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const tabs = [
-  { href: "/", label: "MyLog" },
-  { href: "/public", label: "みんなのLog" }
+  {
+    href: "/",
+    label: "MyLog",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 10.5 12 3.75l8.25 6.75v8.25A1.5 1.5 0 0 1 18.75 20.25h-13.5a1.5 1.5 0 0 1-1.5-1.5V10.5Z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 20.25v-6h4.5v6" />
+      </svg>
+    )
+  },
+  {
+    href: "/plans/assist",
+    label: "AI作成",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor">
+        <path d="M11.25 2.25a.75.75 0 0 1 1.5 0V6a.75.75 0 0 1-1.5 0V2.25Zm0 15.75a.75.75 0 0 1 1.5 0v3.75a.75.75 0 0 1-1.5 0V18Zm-9-6.75a.75.75 0 0 1 0-1.5H6a.75.75 0 0 1 0 1.5H2.25Zm15.75 0a.75.75 0 0 1 0-1.5h3.75a.75.75 0 0 1 0 1.5H18Zm-2.325-5.925a.75.75 0 1 1 1.06-1.06l2.652 2.651a.75.75 0 0 1-1.06 1.06l-2.652-2.651Zm-10.044 10.044a.75.75 0 0 1 1.06 0l2.652 2.651a.75.75 0 0 1-1.06 1.06l-2.652-2.651a.75.75 0 0 1 0-1.06Zm13.756 3.711a.75.75 0 0 1-1.06 0l-2.652-2.651a.75.75 0 1 1 1.06-1.06l2.652 2.651a.75.75 0 0 1 0 1.06ZM8.348 8.348a.75.75 0 0 1-1.06 0L4.636 5.697a.75.75 0 1 1 1.06-1.06l2.652 2.65a.75.75 0 0 1 0 1.061Z" />
+      </svg>
+    )
+  },
+  {
+    href: "/public",
+    label: "みんなのLog",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3.75a8.25 8.25 0 1 0 0 16.5 8.25 8.25 0 0 0 0-16.5Z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5M12 3.75c2.07 2.257 3.214 5.216 3.214 8.25S14.07 17.993 12 20.25c-2.07-2.257-3.214-5.216-3.214-8.25S9.93 6.007 12 3.75Z" />
+      </svg>
+    )
+  }
 ];
 
 export default function TabBar() {
   const pathname = usePathname();
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-slate-200 bg-white/90 backdrop-blur">
-      <div className="mx-auto flex max-w-3xl items-center justify-between px-5 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
-        {tabs.map((tab) => {
-          const active = pathname === tab.href;
-          return (
-            <Link
-              key={tab.href}
-              href={tab.href}
-              className={`flex flex-1 flex-col items-center gap-1 rounded-full px-4 py-2 text-sm font-medium transition ${
-                active
-                  ? "bg-slate-900 text-white shadow-card"
-                  : "text-slate-500 hover:text-slate-700"
-              }`}
-            >
-              <span>{tab.label}</span>
-            </Link>
-          );
-        })}
+    <nav className="pointer-events-none fixed inset-x-0 bottom-0 z-30">
+      <div className="pointer-events-auto mx-auto w-full max-w-[27rem] px-4 pb-[calc(0.85rem+env(safe-area-inset-bottom))] sm:px-5">
+        <div className="flex rounded-full border border-white/80 bg-white/80 p-1.5 shadow-[0_20px_40px_-24px_rgba(15,23,42,0.45)] backdrop-blur-xl">
+          {tabs.map((tab) => {
+            const active =
+              tab.href === "/"
+                ? pathname === "/" || (pathname.startsWith("/plans/") && pathname !== "/plans/assist")
+                : pathname === tab.href;
+            return (
+              <Link
+                key={tab.href}
+                href={tab.href}
+                className={`flex flex-1 flex-col items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] font-semibold transition ${
+                  active
+                    ? "bg-[#dbe4ec] text-slate-900"
+                    : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                {tab.icon}
+                <span>{tab.label}</span>
+              </Link>
+            );
+          })}
+        </div>
       </div>
     </nav>
   );
