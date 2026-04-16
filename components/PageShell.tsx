@@ -22,13 +22,14 @@ export default function PageShell({
   headerRight
 }: PageShellProps) {
   return (
-    <div className="relative min-h-[100dvh] overflow-hidden bg-[#edf2f7]">
+    <div className="relative min-h-[100dvh] overflow-hidden bg-[#d7e7f4]">
       <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute -top-12 left-1/2 h-44 w-44 -translate-x-1/2 rounded-full bg-white/80 blur-3xl" />
-        <div className="absolute -top-20 right-0 h-72 w-72 rounded-full bg-white/70 blur-3xl" />
-        <div className="absolute -bottom-28 -left-12 h-80 w-80 rounded-full bg-slate-200/70 blur-3xl" />
+        <div className="absolute inset-x-0 top-0 h-52 bg-[linear-gradient(180deg,rgba(255,255,255,0.36),rgba(255,255,255,0))]" />
+        <div className="absolute -top-16 left-1/2 h-52 w-52 -translate-x-1/2 rounded-full bg-white/45 blur-3xl" />
+        <div className="absolute right-0 top-10 h-44 w-44 rounded-full bg-[#b4cae0]/40 blur-3xl" />
+        <div className="absolute -bottom-20 left-0 h-52 w-52 rounded-full bg-white/25 blur-3xl" />
       </div>
-      <div className="mx-auto w-full max-w-[27rem] px-4 pt-4 sm:px-5 sm:pt-6 animate-fade-up motion-reduce:animate-none">
+      <div className="mx-auto w-full max-w-[25rem] px-4 pt-4 sm:max-w-[26rem] sm:px-5 sm:pt-5 animate-fade-up motion-reduce:animate-none">
         <Header
           title={title}
           showSettings={showSettings}
@@ -37,8 +38,8 @@ export default function PageShell({
         />
       </div>
       <main
-        className={`mx-auto w-full max-w-[27rem] px-4 pt-4 sm:px-5 sm:pt-5 animate-fade-in motion-reduce:animate-none ${
-          showTabBar ? "pb-[calc(8rem+env(safe-area-inset-bottom))]" : "pb-8"
+        className={`mx-auto w-full max-w-[25rem] px-4 pt-3 sm:max-w-[26rem] sm:px-5 sm:pt-4 animate-fade-in motion-reduce:animate-none ${
+          showTabBar ? "pb-[calc(6.5rem+env(safe-area-inset-bottom))] sm:pb-[calc(6.75rem+env(safe-area-inset-bottom))]" : "pb-8 sm:pb-10"
         }`}
       >
         {children}

@@ -41,6 +41,23 @@ import {
 } from "@/lib/firestore";
 import { formatDate, formatDateTime, formatYen } from "@/lib/format";
 
+async function readJsonResponse<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  if (!text) {
+    return {} as T;
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("text/html") || text.startsWith("<!DOCTYPE") || text.startsWith("<html")) {
+      throw new Error(`API returned HTML instead of JSON (${response.status})`);
+    }
+    throw new Error(`API returned invalid JSON (${response.status})`);
+  }
+}
+
 function getPlanProgress(plan: TravelPlan) {
   if (typeof plan.totalCost !== "number") {
     return null;
@@ -808,6 +825,19 @@ function buildDateTimeValue(datePart: string, timePart: string) {
     return time;
   }
   return "";
+}
+
+function normalizeDateTimeDraftValue(value?: string) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) {
+    return "";
+  }
+  const date = extractDateOnly(text);
+  const time = extractTimeOnly(text);
+  if (date || time) {
+    return buildDateTimeValue(date, time);
+  }
+  return text;
 }
 
 function updateDateTimeValue(
@@ -1640,7 +1670,7 @@ function buildDateDraft(item: ItemRecord, keys: string[], patterns: string[] = [
   if (key) {
     value = formatShortDateTime(getDateField(item, [key]));
     if (!value) {
-      value = getStringField(item, [key]);
+      value = normalizeDateTimeDraftValue(getStringField(item, [key]));
     }
   }
   return { key, value, original: value };
@@ -1964,8 +1994,8 @@ function applySavingsDrafts(drafts: SavingsDraft[]) {
 function InfoRow({ label, value }: { label: string; value?: string }) {
   return (
     <div className="flex items-center justify-between gap-4 text-sm">
-      <span className="font-semibold text-slate-400">{label}</span>
-      <span className="text-right text-[1.05rem] font-semibold text-slate-800">
+      <span className="font-semibold text-slate-400 sm:text-[15px]">{label}</span>
+      <span className="text-right text-[1.05rem] font-semibold text-slate-800 sm:text-[1.15rem]">
         {value && value.length > 0 ? value : "—"}
       </span>
     </div>
@@ -1974,7 +2004,7 @@ function InfoRow({ label, value }: { label: string; value?: string }) {
 
 function SectionTitle({ title }: { title: string }) {
   return (
-    <h3 className="text-[1.5rem] font-semibold tracking-tight text-slate-900">
+    <h3 className="text-[1.5rem] font-semibold tracking-tight text-slate-900 sm:text-[1.7rem] lg:text-[1.85rem]">
       {title}
     </h3>
   );
@@ -3162,7 +3192,7 @@ function TripOverviewMapCard({
       signal: controller.signal
     })
       .then(async (response) => {
-        const payload = (await response.json()) as TripOverviewResponse;
+        const payload = await readJsonResponse<TripOverviewResponse>(response);
         if (!response.ok) {
           throw new Error(payload.detail || "旅程マップを取得できませんでした。");
         }
@@ -3899,7 +3929,7 @@ function PlanDetailContent({ user }: { user: User }) {
       })
     });
 
-    const payload = (await response.json()) as Partial<HotelRecommendationsResponse>;
+    const payload = await readJsonResponse<Partial<HotelRecommendationsResponse>>(response);
     if (!response.ok) {
       throw new Error(getHotelRecommendationsErrorMessage(payload.error, payload.detail));
     }
@@ -3939,7 +3969,7 @@ function PlanDetailContent({ user }: { user: User }) {
       })
     });
 
-    const payload = (await response.json()) as Partial<FlightRecommendationsResponse>;
+    const payload = await readJsonResponse<Partial<FlightRecommendationsResponse>>(response);
     if (!response.ok) {
       throw new Error(
         payload.detail?.trim() ||
@@ -3983,11 +4013,15 @@ function PlanDetailContent({ user }: { user: User }) {
         },
         depTime: {
           ...current.depTime,
-          value: compactText(recommendation.depTime ?? "") || current.depTime.value
+          value:
+            normalizeDateTimeDraftValue(compactText(recommendation.depTime ?? "")) ||
+            current.depTime.value
         },
         arrTime: {
           ...current.arrTime,
-          value: compactText(recommendation.arrTime ?? "") || current.arrTime.value
+          value:
+            normalizeDateTimeDraftValue(compactText(recommendation.arrTime ?? "")) ||
+            current.arrTime.value
         },
         price: {
           ...current.price,
@@ -4023,8 +4057,8 @@ function PlanDetailContent({ user }: { user: User }) {
             id: createDraftId(),
             station: compactText(transfer.station ?? ""),
             serviceName: compactText(transfer.serviceName ?? ""),
-            arrivalTime: compactText(transfer.arrTime ?? ""),
-            departureTime: compactText(transfer.depTime ?? "")
+            arrivalTime: normalizeDateTimeDraftValue(compactText(transfer.arrTime ?? "")),
+            departureTime: normalizeDateTimeDraftValue(compactText(transfer.depTime ?? ""))
           }))
         )
       }),
@@ -4178,7 +4212,7 @@ function PlanDetailContent({ user }: { user: User }) {
       if (!response.ok) {
         throw new Error("fetch_failed");
       }
-      const payload = await response.json();
+      const payload = await readJsonResponse<Record<string, unknown>>(response);
       const info = extractFlightInfo(payload);
       if (
         !info.departureAirport &&
@@ -4366,7 +4400,7 @@ function PlanDetailContent({ user }: { user: User }) {
       method: "POST",
       body: formData
     });
-    const payload = (await response.json()) as Partial<AiAssistantResponse>;
+    const payload = await readJsonResponse<Partial<AiAssistantResponse>>(response);
     if (!response.ok || !payload.plan) {
       throw new Error(getAiPlannerErrorMessage(payload.error, payload.detail));
     }
@@ -4427,7 +4461,7 @@ function PlanDetailContent({ user }: { user: User }) {
         method: "POST",
         body: formData
       });
-      const payload = (await response.json()) as Partial<AiAssistantResponse>;
+      const payload = await readJsonResponse<Partial<AiAssistantResponse>>(response);
 
       if (aiAssistantMode === "consult") {
         const warnings = Array.isArray(payload.warnings)
@@ -5382,9 +5416,9 @@ function PlanDetailContent({ user }: { user: User }) {
           type="button"
           onClick={() => router.back()}
           aria-label="前の画面へ戻る"
-          className="flex h-10 w-10 items-center justify-center rounded-full border border-white/80 bg-white/80 text-slate-700 shadow-[0_10px_22px_-18px_rgba(15,23,42,0.45)] backdrop-blur-md transition hover:bg-white"
+          className="flex h-10 w-10 items-center justify-center rounded-full border border-white/80 bg-white/80 text-slate-700 shadow-[0_10px_22px_-18px_rgba(15,23,42,0.45)] backdrop-blur-md transition hover:bg-white sm:h-11 sm:w-11"
         >
-          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+          <svg viewBox="0 0 24 24" className="h-5 w-5 sm:h-6 sm:w-6" fill="none" stroke="currentColor" strokeWidth="1.8">
             <path strokeLinecap="round" strokeLinejoin="round" d="m15.75 19.5-7.5-7.5 7.5-7.5" />
           </svg>
         </button>
@@ -5401,11 +5435,11 @@ function PlanDetailContent({ user }: { user: User }) {
             読み込み中...
           </div>
         ) : plan ? (
-          <div className="rounded-[1.7rem] border border-[rgba(199,210,224,0.95)] bg-[#fffdfa] p-5 shadow-[7px_9px_0_rgba(190,205,222,0.88)]">
-            <h2 className="text-[1.8rem] font-semibold leading-[1.16] tracking-tight text-slate-900">
+          <div className="rounded-[1.7rem] border border-[rgba(199,210,224,0.95)] bg-[#fffdfa] p-5 shadow-[7px_9px_0_rgba(190,205,222,0.88)] sm:rounded-[1.9rem] sm:p-6">
+            <h2 className="text-[1.8rem] font-semibold leading-[1.16] tracking-tight text-slate-900 sm:text-[2rem] lg:text-[2.15rem]">
               {plan.name || "Untitled"}
             </h2>
-            <div className="mt-4 space-y-2.5">
+            <div className="mt-4 space-y-2.5 sm:mt-5 sm:space-y-3">
               <InfoRow
                 label="日程"
                 value={
@@ -5420,14 +5454,14 @@ function PlanDetailContent({ user }: { user: User }) {
                 value={typeof totalCost === "number" ? formatYen(totalCost) : ""}
               />
             </div>
-            <div className="mt-5">
-              <div className="flex items-center justify-between text-[13px] font-semibold text-slate-500">
+            <div className="mt-5 sm:mt-6">
+              <div className="flex items-center justify-between text-[13px] font-semibold text-slate-500 sm:text-sm">
                 <span>準備状況</span>
                 <span className="text-slate-700">
                   {progress ? `残り ${formatYen(progress.remaining)}` : "残り —"}
                 </span>
               </div>
-              <div className="mt-3 h-2 rounded-full bg-slate-200/80">
+              <div className="mt-3 h-2 rounded-full bg-slate-200/80 sm:mt-4">
                 <div
                   className="h-full rounded-full bg-slate-400"
                   style={{ width: `${progress ? progress.percent : 0}%` }}

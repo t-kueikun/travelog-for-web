@@ -265,12 +265,12 @@ export default function PlanRow({
 
   return (
     <div
-      className={`relative overflow-hidden rounded-2xl ${
+      className={`relative overflow-hidden rounded-[1rem] ${
         isDeleting ? "pointer-events-none animate-slide-out" : ""
       }`}
     >
       {showDelete ? (
-        <div className="pointer-events-none absolute inset-0 rounded-2xl bg-rose-500" />
+        <div className="pointer-events-none absolute inset-0 rounded-[1rem] bg-rose-500" />
       ) : null}
       {showDelete ? (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-end pr-6 text-sm font-semibold text-white">
@@ -290,49 +290,51 @@ export default function PlanRow({
             openPlan();
           }
         }}
-        className="relative z-10 rounded-[1.7rem] border border-[rgba(199,210,224,0.95)] bg-[#fffdfa] px-4 py-3.5 shadow-[7px_9px_0_rgba(190,205,222,0.88)] transition-transform duration-200 ease-out hover:shadow-[9px_12px_0_rgba(190,205,222,0.92)] interactive-shadow will-change-transform"
+        className="relative z-10 rounded-[1rem] border border-[#b7cad9] bg-[#c3d5e1] px-[0.4rem] py-[0.35rem] transition-transform duration-200 ease-out hover:bg-[#bccfdd] will-change-transform"
         style={{ transform: `translateX(${translateX}px)`, touchAction: "pan-y" }}
       >
-        <div className="flex items-start gap-4">
-          <div className="min-w-0 flex-1">
+        <div className="flex items-stretch gap-2">
+          <div className="min-w-0 flex-1 rounded-[0.8rem] bg-white px-3 py-2.5">
             {scheduleLabel ? (
-              <p className="text-[11px] font-semibold tracking-wide text-slate-600">
-                {scheduleLabel}
+              <p className="text-[10px] font-semibold tracking-[-0.02em] text-black/65">
+                {scheduleLabel.replace(" 〜 ", " ~ ")}
               </p>
             ) : null}
-            <h3 className="mt-1 line-clamp-2 text-[1.5rem] font-semibold leading-[1.12] tracking-tight text-slate-900">
+            <h3 className="mt-1 line-clamp-1 text-[1rem] font-semibold leading-[1.15] tracking-[-0.03em] text-black">
               {plan.name || "Untitled"}
             </h3>
-            <p className="mt-1 text-[13px] font-semibold text-slate-600">
+            <p className="mt-1 text-[10px] font-semibold text-black/65">
               {plan.destination || "Destination"}
             </p>
-          </div>
-          <div className="min-w-[5.8rem] border-l border-dashed border-slate-300 pl-3 text-right text-[11px] font-semibold whitespace-pre-line text-slate-700">
-            {departureLabel}
-            <span className="mt-2 block text-[11px] font-medium text-slate-400">
-              {commentsCount > 0 ? `${commentsCount} comments` : ""}
-            </span>
-          </div>
-        </div>
-        <div className="mt-4 flex items-end gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-3 text-[11px] font-semibold text-slate-500">
-              <span className="truncate">{progress.remainingLabel}</span>
-              <span>{progress.progressLabel}</span>
-            </div>
-            <div className="mt-2 h-2 rounded-full border border-slate-300 bg-white">
-              <div
-                className="h-full rounded-full bg-slate-400"
-                style={{ width: `${progress.percent}%` }}
-              />
+            <div className="mt-2.5">
+              <div className="flex items-center justify-between gap-2 text-[9px] font-semibold text-black/55">
+                <span className="truncate">{progress.remainingLabel}</span>
+                <span>{progress.progressLabel}</span>
+              </div>
+              <div className="mt-1.5 h-1 rounded-full border border-[#0d1e75]/20 bg-white">
+                <div
+                  className="h-full rounded-full bg-[#0d1e75]"
+                  style={{ width: `${progress.percent}%` }}
+                />
+              </div>
             </div>
           </div>
-          <div className="rounded-[1rem] bg-[#c6d6e7] px-4 py-1.5 text-[13px] font-bold text-slate-800">
-            詳細
+          <div className="flex w-[5rem] flex-col justify-between border-l border-dashed border-[#6f85a0] pl-2 pt-0.5 text-right">
+            <div className="whitespace-pre-line text-[10px] font-semibold leading-[1.15] text-black/80">
+              {departureLabel}
+              {commentsCount > 0 ? (
+                <span className="mt-1 block text-[9px] font-medium text-black/45">
+                  {commentsCount} comments
+                </span>
+              ) : null}
+            </div>
+            <div className="self-end rounded-[0.45rem] bg-[#a9bfd1] px-3 py-1 text-[10px] font-semibold text-white">
+              詳細
+            </div>
           </div>
         </div>
         {canArchive && onArchive ? (
-          <div className="mt-3 flex justify-end">
+          <div className="mt-2 flex justify-end">
             <button
               type="button"
               data-row-action="true"
@@ -340,7 +342,7 @@ export default function PlanRow({
                 event.stopPropagation();
                 onArchive(plan);
               }}
-              className="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+              className="rounded-full bg-white/70 px-2.5 py-1 text-[9px] font-semibold text-black/55 transition hover:bg-white"
             >
               {isArchived ? "アーカイブから戻す" : "アーカイブ"}
             </button>

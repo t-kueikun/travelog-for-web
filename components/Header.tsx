@@ -11,7 +11,7 @@ type HeaderProps = {
 };
 
 const iconButtonClassName =
-  "flex h-10 w-10 items-center justify-center rounded-full border border-white/80 bg-white/80 text-slate-700 shadow-[0_10px_22px_-18px_rgba(15,23,42,0.45)] backdrop-blur-md transition hover:bg-white";
+  "flex h-9 w-9 items-center justify-center rounded-full text-[#0d1e75] transition hover:bg-white/35 sm:h-10 sm:w-10";
 
 export default function Header({
   title,
@@ -46,9 +46,9 @@ export default function Header({
     ) : null;
 
   return (
-    <div className="grid grid-cols-[2.5rem_1fr_2.5rem] items-center gap-2">
+    <div className="grid grid-cols-[2.5rem_1fr_2.5rem] items-center gap-2 sm:grid-cols-[2.75rem_1fr_2.75rem] sm:gap-3">
       <div className="flex justify-start">{leftContent}</div>
-      <h1 className="text-center text-[1.75rem] font-semibold tracking-tight text-slate-900">
+      <h1 className="text-center text-[1.4rem] font-semibold tracking-[-0.04em] text-[#0d1e75] sm:text-[1.5rem]">
         {title}
       </h1>
       <div className="flex justify-end">{rightAccessory ?? null}</div>

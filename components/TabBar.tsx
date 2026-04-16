@@ -40,8 +40,8 @@ export default function TabBar() {
 
   return (
     <nav className="pointer-events-none fixed inset-x-0 bottom-0 z-30">
-      <div className="pointer-events-auto mx-auto w-full max-w-[27rem] px-4 pb-[calc(0.85rem+env(safe-area-inset-bottom))] sm:px-5">
-        <div className="flex rounded-full border border-white/80 bg-white/80 p-1.5 shadow-[0_20px_40px_-24px_rgba(15,23,42,0.45)] backdrop-blur-xl">
+      <div className="pointer-events-auto mx-auto w-full max-w-[25rem] px-4 pb-[calc(0.7rem+env(safe-area-inset-bottom))] sm:max-w-[26rem] sm:px-5">
+        <div className="flex rounded-full bg-white p-1 shadow-[0_14px_24px_-14px_rgba(0,0,0,0.18)]">
           {tabs.map((tab) => {
             const active =
               tab.href === "/"
@@ -51,13 +51,13 @@ export default function TabBar() {
               <Link
                 key={tab.href}
                 href={tab.href}
-                className={`flex flex-1 flex-col items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] font-semibold transition ${
+                className={`flex flex-1 flex-col items-center gap-0.5 rounded-full px-2 py-1.5 text-[10px] font-medium transition sm:px-2.5 sm:py-1.5 sm:text-[10px] ${
                   active
-                    ? "bg-[#dbe4ec] text-slate-900"
-                    : "text-slate-500 hover:text-slate-700"
+                    ? "bg-[#e5e5e8] text-[#007fff]"
+                    : "text-slate-500 hover:text-[#0d1e75]"
                 }`}
               >
-                {tab.icon}
+                <span className="scale-[0.9] sm:scale-100">{tab.icon}</span>
                 <span>{tab.label}</span>
               </Link>
             );

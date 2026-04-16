@@ -188,29 +188,26 @@ function MyLogContent({
   }, [user.uid]);
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-[1.4rem] border border-white/70 bg-white/60 px-3.5 py-2.5 text-[11px] font-semibold text-slate-500 shadow-[0_16px_34px_-28px_rgba(15,23,42,0.4)] backdrop-blur-md">
-        旅の予定をカードで一覧化。新規作成は右上の `+`、AI作成は下部タブから開けます。
-      </div>
+    <div className="space-y-4 sm:space-y-5">
       {creationError || error ? (
-        <div className="rounded-[1.4rem] bg-white p-3.5 text-sm text-rose-500 shadow-[0_16px_34px_-28px_rgba(15,23,42,0.4)]">
+        <div className="rounded-[1rem] bg-white/90 p-3 text-sm text-rose-500 shadow-[0_10px_24px_-18px_rgba(15,23,42,0.28)]">
           {creationError ?? error}
         </div>
       ) : null}
       {loading ? (
-        <div className="rounded-[1.4rem] bg-white p-3.5 text-sm text-slate-500 shadow-[0_16px_34px_-28px_rgba(15,23,42,0.4)]">
+        <div className="rounded-[1rem] bg-white/90 p-3 text-sm text-slate-500 shadow-[0_10px_24px_-18px_rgba(15,23,42,0.28)]">
           読み込み中...
         </div>
       ) : visiblePlans.length === 0 ? (
-        <div className="rounded-[1.7rem] border border-[rgba(199,210,224,0.95)] bg-[#fffdfa] p-4 shadow-[7px_9px_0_rgba(190,205,222,0.88)]">
-          <p className="text-base font-semibold text-slate-900">まだ旅行プランがありません。</p>
-          <p className="mt-2 text-sm text-slate-500">
+        <div className="rounded-[1rem] bg-white p-4 shadow-[0_10px_24px_-18px_rgba(15,23,42,0.28)]">
+          <p className="text-base font-semibold text-slate-900 sm:text-lg">まだ旅行プランがありません。</p>
+          <p className="mt-2 text-sm text-slate-500 sm:text-[15px]">
             右上の `+` から新しいLogを作成できます。
           </p>
         </div>
       ) : (
-        <div className="space-y-5">
-          <div className="rounded-full border border-white/80 bg-white/80 p-1 shadow-[0_12px_28px_-22px_rgba(15,23,42,0.45)] backdrop-blur-xl">
+        <div className="space-y-5 sm:space-y-6">
+          <div className="rounded-full bg-white/85 p-1 shadow-[0_10px_24px_-18px_rgba(15,23,42,0.22)] backdrop-blur-xl">
             <div className="grid grid-cols-2 gap-1">
               {[
                 { key: "upcoming" as const, label: "今後の旅行", count: planSections.upcoming.length },
@@ -222,14 +219,14 @@ function MyLogContent({
                     key={option.key}
                     type="button"
                     onClick={() => setTimelineView(option.key)}
-                    className={`rounded-full px-3 py-1.5 text-[13px] font-semibold transition ${
+                    className={`rounded-full px-3 py-1.5 text-[12px] font-semibold transition sm:px-4 sm:py-2 sm:text-[13px] ${
                       active
-                        ? "bg-[#dbe4ec] text-slate-900"
-                        : "text-slate-500 hover:text-slate-700"
+                        ? "bg-[#e5e5e8] text-[#0d1e75]"
+                        : "text-slate-500 hover:text-[#0d1e75]"
                     }`}
                   >
                     {option.label}
-                      <span className={`ml-1.5 text-[10px] ${active ? "text-slate-600" : "text-slate-400"}`}>
+                      <span className={`ml-1.5 text-[10px] sm:text-[11px] ${active ? "text-[#0d1e75]/70" : "text-slate-400"}`}>
                         {option.count}件
                       </span>
                     </button>
@@ -238,7 +235,7 @@ function MyLogContent({
             </div>
           </div>
 
-          <section className="space-y-3.5">
+          <section className="space-y-3.5 sm:space-y-4">
             {activePlans.length > 0 ? (
               activePlans.map((plan) => (
                 <PlanRow
@@ -272,7 +269,7 @@ function MyLogContent({
                 />
               ))
             ) : (
-              <div className="rounded-[1.4rem] bg-white p-3.5 text-sm text-slate-500 shadow-[0_16px_34px_-28px_rgba(15,23,42,0.4)]">
+              <div className="rounded-[1rem] bg-white/90 p-3 text-sm text-slate-500 shadow-[0_10px_24px_-18px_rgba(15,23,42,0.28)]">
                 {timelineView === "upcoming" ? "予定中の旅行はありません。" : "過去の旅行はありません。"}
               </div>
             )}
@@ -315,9 +312,9 @@ function MyLogPageInner({ user }: { user: User }) {
           onClick={() => void handleCreate()}
           disabled={creating}
           aria-label="新しいLogを作成"
-          className="flex h-10 w-10 items-center justify-center rounded-full border border-white/80 bg-white/80 text-slate-700 shadow-[0_10px_22px_-18px_rgba(15,23,42,0.45)] backdrop-blur-md transition hover:bg-white disabled:opacity-50"
+          className="flex h-9 w-9 items-center justify-center rounded-full text-[#0d1e75] transition hover:bg-white/35 disabled:opacity-50 sm:h-10 sm:w-10"
         >
-          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8">
+          <svg viewBox="0 0 24 24" className="h-5 w-5 sm:h-6 sm:w-6" fill="none" stroke="currentColor" strokeWidth="1.8">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 5.25v13.5M5.25 12h13.5" />
           </svg>
         </button>

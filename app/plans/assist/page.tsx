@@ -73,6 +73,23 @@ type AssistFollowUpQuestion = {
   helper?: string;
 };
 
+async function readJsonResponse<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  if (!text) {
+    return {} as T;
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("text/html") || text.startsWith("<!DOCTYPE") || text.startsWith("<html")) {
+      throw new Error(`API returned HTML instead of JSON (${response.status})`);
+    }
+    throw new Error(`API returned invalid JSON (${response.status})`);
+  }
+}
+
 const INTEREST_OPTIONS = [
   "グルメ",
   "観光名所",
@@ -1059,7 +1076,7 @@ function AssistCreateContent({ user }: { user: User }) {
           body: JSON.stringify({ query, locale: "ja", limit: 5 }),
           cache: "no-store"
         });
-        const payload = (await response.json()) as { airports?: AirportSuggestion[] };
+        const payload = await readJsonResponse<{ airports?: AirportSuggestion[] }>(response);
         if (!active) {
           return;
         }
@@ -1094,7 +1111,7 @@ function AssistCreateContent({ user }: { user: User }) {
           body: JSON.stringify({ query, locale: "ja", limit: 5 }),
           cache: "no-store"
         });
-        const payload = (await response.json()) as { airports?: AirportSuggestion[] };
+        const payload = await readJsonResponse<{ airports?: AirportSuggestion[] }>(response);
         if (!active) {
           return;
         }
@@ -1280,7 +1297,7 @@ function AssistCreateContent({ user }: { user: User }) {
       })
     });
 
-    const payload = (await response.json()) as FlightRecommendationsResponse;
+    const payload = await readJsonResponse<FlightRecommendationsResponse>(response);
     if (!response.ok) {
       throw new Error(
         payload.detail?.trim() ||
@@ -1413,11 +1430,11 @@ function AssistCreateContent({ user }: { user: User }) {
         method: "POST",
         body: formData
       });
-      const payload = (await response.json()) as {
+      const payload = await readJsonResponse<{
         plan?: AiPlanSuggestion;
         detail?: string;
         error?: string;
-      };
+      }>(response);
       if (!response.ok || !payload.plan) {
         const detail = payload.detail?.trim() || payload.error?.trim() || "";
         throw new Error(detail || "AIプランの生成に失敗しました。");
