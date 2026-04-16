@@ -29,7 +29,7 @@ export default function PageShell({
         <div className="absolute right-0 top-10 h-44 w-44 rounded-full bg-[#b4cae0]/40 blur-3xl" />
         <div className="absolute -bottom-20 left-0 h-52 w-52 rounded-full bg-white/25 blur-3xl" />
       </div>
-      <div className="mx-auto w-full max-w-[25rem] px-4 pt-4 sm:max-w-[26rem] sm:px-5 sm:pt-5 animate-fade-up motion-reduce:animate-none">
+      <div className="mx-auto w-full max-w-[var(--app-shell-max)] px-[var(--app-shell-gutter)] pt-4 sm:pt-5 lg:pt-6 animate-fade-up motion-reduce:animate-none">
         <Header
           title={title}
           showSettings={showSettings}
@@ -38,8 +38,8 @@ export default function PageShell({
         />
       </div>
       <main
-        className={`mx-auto w-full max-w-[25rem] px-4 pt-3 sm:max-w-[26rem] sm:px-5 sm:pt-4 animate-fade-in motion-reduce:animate-none ${
-          showTabBar ? "pb-[calc(6.5rem+env(safe-area-inset-bottom))] sm:pb-[calc(6.75rem+env(safe-area-inset-bottom))]" : "pb-8 sm:pb-10"
+        className={`mx-auto w-full max-w-[var(--app-shell-max)] px-[var(--app-shell-gutter)] pt-3 sm:pt-4 lg:pt-5 animate-fade-in motion-reduce:animate-none ${
+          showTabBar ? "pb-[calc(6.5rem+env(safe-area-inset-bottom))] sm:pb-[calc(6.75rem+env(safe-area-inset-bottom))] lg:pb-[calc(7rem+env(safe-area-inset-bottom))]" : "pb-8 sm:pb-10 lg:pb-12"
         }`}
       >
         {children}

@@ -11,6 +11,8 @@
   --accent-soft: #22d3ee;
   --panel-shadow: 8px 10px 0 rgba(190, 205, 222, 0.9);
   --panel-border: rgba(199, 210, 224, 0.9);
+  --app-shell-max: 25rem;
+  --app-shell-gutter: 1rem;
 }
 
 * {
@@ -20,6 +22,8 @@
 html,
 body {
   height: 100%;
+  width: 100%;
+  overflow-x: clip;
 }
 
 body {
@@ -30,8 +34,11 @@ body {
   color: var(--ink);
   font-family: "Avenir Next", "SF Pro Display", "Hiragino Sans", "Noto Sans JP", "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   padding-bottom: env(safe-area-inset-bottom);
   background-attachment: fixed;
+  min-width: 320px;
 }
 
 a {
@@ -43,6 +50,26 @@ input,
 textarea,
 select {
   font-size: 16px;
+}
+
+@media (min-width: 640px) {
+  :root {
+    --app-shell-max: 42rem;
+    --app-shell-gutter: 1.25rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  :root {
+    --app-shell-max: 70rem;
+    --app-shell-gutter: 1.75rem;
+  }
+}
+
+@media (max-width: 767px) {
+  body {
+    background-attachment: scroll;
+  }
 }
 
 @keyframes fade-up {

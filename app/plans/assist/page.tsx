@@ -119,6 +119,8 @@ const ROUTE_POLICY_OPTIONS = [
 const TRANSFER_LIMIT_OPTIONS = ["制限なし", "乗換1回まで", "乗換2回まで"] as const;
 
 const TIME_BAND_OPTIONS = ["指定なし", "朝", "昼", "夕方", "夜"] as const;
+const TRAVELER_COUNT_MIN = 1;
+const TRAVELER_COUNT_MAX = 20;
 
 const HOTEL_GRADE_OPTIONS = ["指定なし", "3つ星以上", "4つ星以上", "5つ星以上"] as const;
 const DESTINATION_SCOPE_OPTIONS = ["海外", "国内"] as const;
@@ -1013,6 +1015,14 @@ function AssistCreateContent({ user }: { user: User }) {
     [destinationScope]
   );
   const activeFollowUpQuestion = followUpQuestions[activeFollowUpIndex] ?? null;
+  const adjustTravelerCount = (delta: number) => {
+    const current = Number(travelerCount) || TRAVELER_COUNT_MIN;
+    const next = Math.min(
+      TRAVELER_COUNT_MAX,
+      Math.max(TRAVELER_COUNT_MIN, current + delta)
+    );
+    setTravelerCount(String(next));
+  };
   const activeFollowUpAnswer = activeFollowUpQuestion
     ? followUpAnswers[activeFollowUpQuestion.id] ?? ""
     : "";
@@ -1811,12 +1821,40 @@ function AssistCreateContent({ user }: { user: User }) {
           </label>
           <label className="text-xs font-semibold text-slate-600">
             同行人数
-            <input
-              value={travelerCount}
-              onChange={(event) => setTravelerCount(event.target.value.replace(/[^\d]/g, ""))}
-              placeholder="例: 2"
-              className="mt-1.5 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-900 outline-none transition focus:border-sky-300"
-            />
+            <div className="mt-1.5 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => adjustTravelerCount(-1)}
+                disabled={(Number(travelerCount) || TRAVELER_COUNT_MIN) <= TRAVELER_COUNT_MIN}
+                aria-label="同行人数を減らす"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-lg font-bold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                -
+              </button>
+              <div className="flex min-w-0 flex-1 items-center rounded-xl border border-slate-200 bg-slate-50 px-3">
+                <input
+                  value={travelerCount}
+                  onChange={(event) =>
+                    setTravelerCount(
+                      event.target.value.replace(/[^\d]/g, "").slice(0, 2)
+                    )
+                  }
+                  inputMode="numeric"
+                  placeholder="例: 2"
+                  className="w-full bg-transparent py-2 text-sm font-medium text-slate-900 outline-none"
+                />
+                <span className="ml-2 shrink-0 text-sm font-semibold text-slate-500">名</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => adjustTravelerCount(1)}
+                disabled={(Number(travelerCount) || TRAVELER_COUNT_MIN) >= TRAVELER_COUNT_MAX}
+                aria-label="同行人数を増やす"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-lg font-bold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                +
+              </button>
+            </div>
             {destinationAirportPreference ? (
               <p className="mt-2 text-[11px] font-semibold text-slate-500">
                 到着空港: {destinationAirportPreference}

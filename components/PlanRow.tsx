@@ -290,28 +290,29 @@ export default function PlanRow({
             openPlan();
           }
         }}
-        className="relative z-10 rounded-[1rem] border border-[#b7cad9] bg-[#c3d5e1] px-[0.4rem] py-[0.35rem] transition-transform duration-200 ease-out hover:bg-[#bccfdd] will-change-transform"
+        className="relative z-10 rounded-[1.35rem] border border-[#b7cad9] bg-[linear-gradient(180deg,#d3e0ea_0%,#c5d4e0_100%)] p-3 transition-transform duration-200 ease-out hover:bg-[#ccd9e4] will-change-transform sm:p-3.5"
         style={{ transform: `translateX(${translateX}px)`, touchAction: "pan-y" }}
       >
-        <div className="flex items-stretch gap-2">
-          <div className="min-w-0 flex-1 rounded-[0.8rem] bg-white px-3 py-2.5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-stretch lg:gap-4">
+          <div className="min-w-0 flex-1 rounded-[1.1rem] bg-white px-4 py-4 shadow-[0_12px_28px_-24px_rgba(15,23,42,0.45)] sm:px-5 sm:py-5">
             {scheduleLabel ? (
-              <p className="text-[10px] font-semibold tracking-[-0.02em] text-black/65">
-                {scheduleLabel.replace(" 〜 ", " ~ ")}
+              <p className="text-[11px] font-semibold tracking-[0.01em] text-slate-500 sm:text-xs">
+                {scheduleLabel}
               </p>
             ) : null}
-            <h3 className="mt-1 line-clamp-1 text-[1rem] font-semibold leading-[1.15] tracking-[-0.03em] text-black">
+            <h3 className="mt-2 line-clamp-2 text-[1.15rem] font-semibold leading-[1.2] tracking-[-0.03em] text-slate-950 sm:text-[1.35rem] lg:text-[1.5rem]">
               {plan.name || "Untitled"}
             </h3>
-            <p className="mt-1 text-[10px] font-semibold text-black/65">
+            <p className="mt-2 text-sm font-medium text-slate-600 sm:text-[15px]">
               {plan.destination || "Destination"}
             </p>
-            <div className="mt-2.5">
-              <div className="flex items-center justify-between gap-2 text-[9px] font-semibold text-black/55">
-                <span className="truncate">{progress.remainingLabel}</span>
-                <span>{progress.progressLabel}</span>
+            <div className="mt-4">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs font-semibold text-slate-500 sm:text-[13px]">
+                <span>{progress.remainingLabel}</span>
+                <span>進捗 {progress.progressLabel}</span>
+                {commentsCount > 0 ? <span>{commentsCount} comments</span> : null}
               </div>
-              <div className="mt-1.5 h-1 rounded-full border border-[#0d1e75]/20 bg-white">
+              <div className="mt-3 h-2 rounded-full bg-slate-100">
                 <div
                   className="h-full rounded-full bg-[#0d1e75]"
                   style={{ width: `${progress.percent}%` }}
@@ -319,35 +320,35 @@ export default function PlanRow({
               </div>
             </div>
           </div>
-          <div className="flex w-[5rem] flex-col justify-between border-l border-dashed border-[#6f85a0] pl-2 pt-0.5 text-right">
-            <div className="whitespace-pre-line text-[10px] font-semibold leading-[1.15] text-black/80">
-              {departureLabel}
-              {commentsCount > 0 ? (
-                <span className="mt-1 block text-[9px] font-medium text-black/45">
-                  {commentsCount} comments
-                </span>
-              ) : null}
+          <div className="flex flex-row items-center justify-between gap-3 rounded-[1rem] border border-white/60 bg-white/35 px-4 py-3 backdrop-blur-sm lg:w-[12rem] lg:flex-col lg:items-stretch lg:justify-between lg:border-l lg:border-t-0 lg:px-4 lg:py-4">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+                Departure
+              </p>
+              <p className="mt-1 whitespace-pre-line text-sm font-semibold leading-[1.25] text-slate-900 sm:text-[15px] lg:text-base">
+                {departureLabel}
+              </p>
             </div>
-            <div className="self-end rounded-[0.45rem] bg-[#a9bfd1] px-3 py-1 text-[10px] font-semibold text-white">
-              詳細
+            <div className="flex shrink-0 items-center gap-2 lg:flex-col lg:items-stretch">
+              <div className="rounded-full bg-[#9eb7cb] px-4 py-2 text-xs font-semibold text-white text-center shadow-[0_10px_18px_-16px_rgba(15,23,42,0.65)]">
+                詳細を見る
+              </div>
+              {canArchive && onArchive ? (
+                <button
+                  type="button"
+                  data-row-action="true"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onArchive(plan);
+                  }}
+                  className="rounded-full bg-white/85 px-3.5 py-2 text-[11px] font-semibold text-slate-600 transition hover:bg-white"
+                >
+                  {isArchived ? "戻す" : "アーカイブ"}
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
-        {canArchive && onArchive ? (
-          <div className="mt-2 flex justify-end">
-            <button
-              type="button"
-              data-row-action="true"
-              onClick={(event) => {
-                event.stopPropagation();
-                onArchive(plan);
-              }}
-              className="rounded-full bg-white/70 px-2.5 py-1 text-[9px] font-semibold text-black/55 transition hover:bg-white"
-            >
-              {isArchived ? "アーカイブから戻す" : "アーカイブ"}
-            </button>
-          </div>
-        ) : null}
       </div>
     </div>
   );

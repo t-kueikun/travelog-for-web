@@ -40,8 +40,8 @@ export default function TabBar() {
 
   return (
     <nav className="pointer-events-none fixed inset-x-0 bottom-0 z-30">
-      <div className="pointer-events-auto mx-auto w-full max-w-[25rem] px-4 pb-[calc(0.7rem+env(safe-area-inset-bottom))] sm:max-w-[26rem] sm:px-5">
-        <div className="flex rounded-full bg-white p-1 shadow-[0_14px_24px_-14px_rgba(0,0,0,0.18)]">
+      <div className="pointer-events-auto mx-auto w-full max-w-[var(--app-shell-max)] px-[var(--app-shell-gutter)] pb-[calc(0.7rem+env(safe-area-inset-bottom))] lg:pb-[calc(0.95rem+env(safe-area-inset-bottom))]">
+        <div className="flex rounded-full bg-white p-1 shadow-[0_14px_24px_-14px_rgba(0,0,0,0.18)] lg:mx-auto lg:max-w-xl">
           {tabs.map((tab) => {
             const active =
               tab.href === "/"
@@ -51,13 +51,13 @@ export default function TabBar() {
               <Link
                 key={tab.href}
                 href={tab.href}
-                className={`flex flex-1 flex-col items-center gap-0.5 rounded-full px-2 py-1.5 text-[10px] font-medium transition sm:px-2.5 sm:py-1.5 sm:text-[10px] ${
+                className={`flex flex-1 flex-col items-center gap-0.5 rounded-full px-2 py-1.5 text-[10px] font-medium transition sm:px-2.5 sm:py-1.5 sm:text-[10px] lg:flex-row lg:justify-center lg:gap-2 lg:px-4 lg:py-2 lg:text-xs ${
                   active
                     ? "bg-[#e5e5e8] text-[#007fff]"
                     : "text-slate-500 hover:text-[#0d1e75]"
                 }`}
               >
-                <span className="scale-[0.9] sm:scale-100">{tab.icon}</span>
+                <span className="scale-[0.9] sm:scale-100 lg:scale-100">{tab.icon}</span>
                 <span>{tab.label}</span>
               </Link>
             );

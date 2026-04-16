@@ -130,6 +130,59 @@ function splitPlansByTimeline(items: TravelPlan[]) {
   };
 }
 
+function MyLogLoadingState() {
+  return (
+    <div className="space-y-5 sm:space-y-6">
+      <div className="mx-auto w-full max-w-3xl rounded-full bg-white/85 p-1 shadow-[0_10px_24px_-18px_rgba(15,23,42,0.22)] backdrop-blur-xl">
+        <div className="grid grid-cols-2 gap-1">
+          <div className="rounded-full bg-[#e5e5e8] px-3 py-2 sm:px-4 sm:py-2.5">
+            <div className="mx-auto h-3 w-28 animate-pulse rounded-full bg-slate-300/75 sm:h-3.5 sm:w-32" />
+          </div>
+          <div className="rounded-full px-3 py-2 sm:px-4 sm:py-2.5">
+            <div className="mx-auto h-3 w-24 animate-pulse rounded-full bg-slate-200 sm:h-3.5 sm:w-28" />
+          </div>
+        </div>
+      </div>
+
+      <section className="space-y-3.5 sm:space-y-4 lg:space-y-4.5">
+        {[0, 1, 2].map((item) => (
+          <div
+            key={item}
+            className="rounded-[1.35rem] border border-[#b7cad9] bg-[linear-gradient(180deg,#d3e0ea_0%,#c5d4e0_100%)] p-3 sm:p-3.5"
+          >
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-stretch lg:gap-4">
+              <div className="min-w-0 flex-1 rounded-[1.1rem] bg-white px-4 py-4 shadow-[0_12px_28px_-24px_rgba(15,23,42,0.45)] sm:px-5 sm:py-5">
+                <div className="h-3 w-36 animate-pulse rounded-full bg-slate-200 sm:w-44" />
+                <div className="mt-3 h-7 w-[72%] animate-pulse rounded-full bg-slate-200 sm:h-8" />
+                <div className="mt-3 h-4 w-24 animate-pulse rounded-full bg-slate-100 sm:w-28" />
+                <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <div className="h-3.5 w-24 animate-pulse rounded-full bg-slate-100 sm:w-28" />
+                  <div className="h-3.5 w-20 animate-pulse rounded-full bg-slate-100 sm:w-24" />
+                </div>
+                <div className="mt-3 h-2 rounded-full bg-slate-100">
+                  <div className="h-full w-[22%] animate-pulse rounded-full bg-slate-200" />
+                </div>
+              </div>
+
+              <div className="flex flex-row items-center justify-between gap-3 rounded-[1rem] border border-white/60 bg-white/35 px-4 py-3 backdrop-blur-sm lg:w-[12rem] lg:flex-col lg:items-stretch lg:justify-between lg:px-4 lg:py-4">
+                <div className="min-w-0">
+                  <div className="h-2.5 w-16 animate-pulse rounded-full bg-slate-200" />
+                  <div className="mt-2 h-4 w-24 animate-pulse rounded-full bg-slate-300/80" />
+                  <div className="mt-1.5 h-4 w-16 animate-pulse rounded-full bg-slate-300/60" />
+                </div>
+                <div className="flex shrink-0 items-center gap-2 lg:flex-col lg:items-stretch">
+                  <div className="h-10 w-24 animate-pulse rounded-full bg-[#9eb7cb]/70" />
+                  <div className="h-10 w-24 animate-pulse rounded-full bg-white/90" />
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </section>
+    </div>
+  );
+}
+
 function MyLogContent({
   user,
   creationError
@@ -188,16 +241,14 @@ function MyLogContent({
   }, [user.uid]);
 
   return (
-    <div className="space-y-4 sm:space-y-5">
+    <div className="mx-auto w-full max-w-5xl space-y-4 sm:space-y-5 lg:space-y-6">
       {creationError || error ? (
         <div className="rounded-[1rem] bg-white/90 p-3 text-sm text-rose-500 shadow-[0_10px_24px_-18px_rgba(15,23,42,0.28)]">
           {creationError ?? error}
         </div>
       ) : null}
       {loading ? (
-        <div className="rounded-[1rem] bg-white/90 p-3 text-sm text-slate-500 shadow-[0_10px_24px_-18px_rgba(15,23,42,0.28)]">
-          読み込み中...
-        </div>
+        <MyLogLoadingState />
       ) : visiblePlans.length === 0 ? (
         <div className="rounded-[1rem] bg-white p-4 shadow-[0_10px_24px_-18px_rgba(15,23,42,0.28)]">
           <p className="text-base font-semibold text-slate-900 sm:text-lg">まだ旅行プランがありません。</p>
@@ -207,7 +258,7 @@ function MyLogContent({
         </div>
       ) : (
         <div className="space-y-5 sm:space-y-6">
-          <div className="rounded-full bg-white/85 p-1 shadow-[0_10px_24px_-18px_rgba(15,23,42,0.22)] backdrop-blur-xl">
+          <div className="mx-auto w-full max-w-3xl rounded-full bg-white/85 p-1 shadow-[0_10px_24px_-18px_rgba(15,23,42,0.22)] backdrop-blur-xl">
             <div className="grid grid-cols-2 gap-1">
               {[
                 { key: "upcoming" as const, label: "今後の旅行", count: planSections.upcoming.length },
@@ -219,7 +270,7 @@ function MyLogContent({
                     key={option.key}
                     type="button"
                     onClick={() => setTimelineView(option.key)}
-                    className={`rounded-full px-3 py-1.5 text-[12px] font-semibold transition sm:px-4 sm:py-2 sm:text-[13px] ${
+                    className={`rounded-full px-3 py-2 text-[12px] font-semibold transition sm:px-4 sm:py-2.5 sm:text-[13px] ${
                       active
                         ? "bg-[#e5e5e8] text-[#0d1e75]"
                         : "text-slate-500 hover:text-[#0d1e75]"
@@ -235,7 +286,7 @@ function MyLogContent({
             </div>
           </div>
 
-          <section className="space-y-3.5 sm:space-y-4">
+          <section className="space-y-3.5 sm:space-y-4 lg:space-y-4.5">
             {activePlans.length > 0 ? (
               activePlans.map((plan) => (
                 <PlanRow
