@@ -532,6 +532,7 @@ function buildTransportFromFlightRecommendation(flight: FlightRecommendation) {
   return {
     type: "飛行機",
     name: flight.airline ?? null,
+    airlineLogo: flight.airlineLogo ?? null,
     serviceName: flight.flightNumber ?? null,
     seatNumber: null,
     from: flight.from ?? null,
