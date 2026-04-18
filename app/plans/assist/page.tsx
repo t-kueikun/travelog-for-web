@@ -50,7 +50,37 @@ type FlightRecommendationsResponse = {
   warnings?: string[];
   detail?: string;
   error?: string;
+  host?: string;
 };
+
+type FlightOptionsDiagnostics = {
+  statusCode: number;
+  errorCode: string;
+  host: string;
+  occurredAtJst: string;
+};
+
+class FlightOptionsError extends Error {
+  statusCode: number;
+  errorCode: string;
+  host: string;
+  occurredAtJst: string;
+
+  constructor(params: {
+    statusCode: number;
+    errorCode: string;
+    host: string;
+    detail?: string;
+    occurredAtJst: string;
+  }) {
+    super(params.detail?.trim() || params.errorCode);
+    this.name = "FlightOptionsError";
+    this.statusCode = params.statusCode;
+    this.errorCode = params.errorCode;
+    this.host = params.host;
+    this.occurredAtJst = params.occurredAtJst;
+  }
+}
 
 type AirportSuggestion = {
   code: string;
@@ -266,6 +296,16 @@ function formatTimePreferenceLabel(value: string) {
 
 function normalizeAirportLookupText(value: string) {
   return value.trim().toLowerCase();
+}
+
+function formatJstTimestamp(date = new Date()) {
+  const jst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
+  const year = jst.getUTCFullYear();
+  const month = String(jst.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(jst.getUTCDate()).padStart(2, "0");
+  const hours = String(jst.getUTCHours()).padStart(2, "0");
+  const minutes = String(jst.getUTCMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hours}:${minutes} JST`;
 }
 
 function getAirportOptionsForPlace(value: string) {
@@ -995,6 +1035,7 @@ function AssistCreateContent({ user }: { user: User }) {
   const [flightChoiceLoading, setFlightChoiceLoading] = useState(false);
   const [flightChoiceOpen, setFlightChoiceOpen] = useState(false);
   const [flightChoiceError, setFlightChoiceError] = useState<string | null>(null);
+  const [flightChoiceDiagnostics, setFlightChoiceDiagnostics] = useState<FlightOptionsDiagnostics | null>(null);
   const [outboundFlightOptions, setOutboundFlightOptions] = useState<FlightRecommendation[]>([]);
   const [returnFlightOptions, setReturnFlightOptions] = useState<FlightRecommendation[]>([]);
   const [outboundFlightWarnings, setOutboundFlightWarnings] = useState<string[]>([]);
@@ -1287,6 +1328,7 @@ function AssistCreateContent({ user }: { user: User }) {
     preferredDepartureTime?: string;
     preferredArrivalTime?: string;
   }) => {
+    const occurredAtJst = formatJstTimestamp();
     const response = await fetch("/api/flights/recommendations", {
       method: "POST",
       cache: "no-store",
@@ -1310,11 +1352,19 @@ function AssistCreateContent({ user }: { user: User }) {
 
     const payload = await readJsonResponse<FlightRecommendationsResponse>(response);
     if (!response.ok) {
-      throw new Error(
-        payload.detail?.trim() ||
+      const host =
+        payload.host?.trim() ||
+        (typeof window !== "undefined" ? window.location.host : "unknown-host");
+      throw new FlightOptionsError({
+        statusCode: response.status,
+        errorCode: payload.error?.trim() || "flight_recommendations_failed",
+        host,
+        detail:
+          payload.detail?.trim() ||
           payload.error?.trim() ||
-          "フライト候補の取得に失敗しました。"
-      );
+          "フライト候補の取得に失敗しました。",
+        occurredAtJst
+      });
     }
 
     return {
@@ -1549,6 +1599,7 @@ function AssistCreateContent({ user }: { user: User }) {
     setReturnFlightWarnings([]);
     setFlightChoiceLoading(true);
     setFlightChoiceError(null);
+    setFlightChoiceDiagnostics(null);
     try {
       const result = await fetchPreflightOptions();
       if (!result.hasAny) {
@@ -1558,10 +1609,30 @@ function AssistCreateContent({ user }: { user: User }) {
       }
       setFlightChoiceOpen(true);
     } catch (err) {
-      setFlightChoiceError(
-        err instanceof Error ? err.message : "候補便の取得に失敗しました。"
-      );
-      setError(err instanceof Error ? err.message : "候補便の取得に失敗しました。");
+      if (err instanceof FlightOptionsError) {
+        const diagnostics: FlightOptionsDiagnostics = {
+          statusCode: err.statusCode,
+          errorCode: err.errorCode,
+          host: err.host,
+          occurredAtJst: err.occurredAtJst
+        };
+        setFlightChoiceDiagnostics(diagnostics);
+        console.error("assist_flight_options_failed", diagnostics);
+        if (err.statusCode === 502) {
+          setFlightChoiceError(
+            "現在、候補便APIでサーバー障害が発生しています。アプリ不具合ではないため、便なしで続行できます。"
+          );
+          setFlightChoiceOpen(true);
+        } else {
+          setFlightChoiceError(err.message || "候補便の取得に失敗しました。");
+          setError(err.message || "候補便の取得に失敗しました。");
+        }
+      } else {
+        setFlightChoiceError(
+          err instanceof Error ? err.message : "候補便の取得に失敗しました。"
+        );
+        setError(err instanceof Error ? err.message : "候補便の取得に失敗しました。");
+      }
     } finally {
       setFlightChoiceLoading(false);
     }
@@ -2197,7 +2268,12 @@ function AssistCreateContent({ user }: { user: User }) {
                 <div className="max-h-[75vh] overflow-y-auto px-5 py-4">
                   {flightChoiceError ? (
                     <div className="mb-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                      {flightChoiceError}
+                      <p>{flightChoiceError}</p>
+                      {flightChoiceDiagnostics ? (
+                        <p className="mt-2 text-xs font-semibold text-rose-800">
+                          status code: {flightChoiceDiagnostics.statusCode} / error code: {flightChoiceDiagnostics.errorCode} / host: {flightChoiceDiagnostics.host}
+                        </p>
+                      ) : null}
                     </div>
                   ) : null}
                   <div className="grid gap-4 lg:grid-cols-2">

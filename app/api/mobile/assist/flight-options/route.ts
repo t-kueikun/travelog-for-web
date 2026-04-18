@@ -16,7 +16,22 @@ type FlightRecommendationsResponse = {
   warnings?: string[];
   detail?: string;
   error?: string;
+  host?: string;
 };
+
+class FlightOptionsRequestError extends Error {
+  status: number;
+  code: string;
+  host: string;
+
+  constructor(params: { status: number; code: string; host: string; detail?: string }) {
+    super(params.detail?.trim() || params.code);
+    this.name = "FlightOptionsRequestError";
+    this.status = params.status;
+    this.code = params.code;
+    this.host = params.host;
+  }
+}
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
@@ -67,13 +82,18 @@ async function requestFlightRecommendations(
     })
   });
   const payload = await readJsonResponse<FlightRecommendationsResponse>(response);
+  const host = payload.host?.trim() || url.host;
 
   if (!response.ok) {
-    throw new Error(
-      payload.detail?.trim() ||
+    throw new FlightOptionsRequestError({
+      status: response.status,
+      code: payload.error?.trim() || "flight_recommendations_failed",
+      host,
+      detail:
+        payload.detail?.trim() ||
         payload.error?.trim() ||
         "フライト候補の取得に失敗しました。"
-    );
+    });
   }
 
   return {
@@ -132,10 +152,25 @@ export async function POST(request: Request) {
       hasInbound: inbound.recommendations.length > 0
     });
   } catch (error) {
+    if (error instanceof FlightOptionsRequestError) {
+      return NextResponse.json(
+        {
+          error: "flight_options_failed",
+          detail: error.message || "候補便の取得に失敗しました。",
+          upstreamStatus: error.status,
+          upstreamError: error.code,
+          host: error.host
+        },
+        { status: 502 }
+      );
+    }
     return NextResponse.json(
       {
         error: "flight_options_failed",
-        detail: error instanceof Error ? error.message : "候補便の取得に失敗しました。"
+        detail: error instanceof Error ? error.message : "候補便の取得に失敗しました。",
+        upstreamStatus: 502,
+        upstreamError: "flight_options_failed",
+        host: new URL(request.url).host
       },
       { status: 502 }
     );
