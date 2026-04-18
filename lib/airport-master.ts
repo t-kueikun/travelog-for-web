@@ -3,6 +3,37 @@ import { readFile } from "node:fs/promises";
 const AIRPORTS_CSV_PATH =
   process.env.AIRPORTS_CSV_PATH || "/Users/tokuei/Downloads/airports.csv";
 
+const FALLBACK_AIRPORT_MASTER: AirportMasterRecord[] = [
+  { code: "HND", name: "Haneda Airport", cityName: "Tokyo", countryCode: "JP", countryName: "Japan", type: "large_airport", scheduledService: true },
+  { code: "NRT", name: "Narita International Airport", cityName: "Tokyo", countryCode: "JP", countryName: "Japan", type: "large_airport", scheduledService: true },
+  { code: "ITM", name: "Osaka International Airport", cityName: "Osaka", countryCode: "JP", countryName: "Japan", type: "medium_airport", scheduledService: true },
+  { code: "KIX", name: "Kansai International Airport", cityName: "Osaka", countryCode: "JP", countryName: "Japan", type: "large_airport", scheduledService: true },
+  { code: "UKB", name: "Kobe Airport", cityName: "Kobe", countryCode: "JP", countryName: "Japan", type: "medium_airport", scheduledService: true },
+  { code: "CTS", name: "New Chitose Airport", cityName: "Sapporo", countryCode: "JP", countryName: "Japan", type: "large_airport", scheduledService: true },
+  { code: "FUK", name: "Fukuoka Airport", cityName: "Fukuoka", countryCode: "JP", countryName: "Japan", type: "large_airport", scheduledService: true },
+  { code: "OKA", name: "Naha Airport", cityName: "Naha", countryCode: "JP", countryName: "Japan", type: "medium_airport", scheduledService: true },
+  { code: "ICN", name: "Incheon International Airport", cityName: "Seoul", countryCode: "KR", countryName: "South Korea", type: "large_airport", scheduledService: true },
+  { code: "GMP", name: "Gimpo International Airport", cityName: "Seoul", countryCode: "KR", countryName: "South Korea", type: "large_airport", scheduledService: true },
+  { code: "TPE", name: "Taiwan Taoyuan International Airport", cityName: "Taipei", countryCode: "TW", countryName: "Taiwan", type: "large_airport", scheduledService: true },
+  { code: "TSA", name: "Taipei Songshan Airport", cityName: "Taipei", countryCode: "TW", countryName: "Taiwan", type: "medium_airport", scheduledService: true },
+  { code: "BKK", name: "Suvarnabhumi Airport", cityName: "Bangkok", countryCode: "TH", countryName: "Thailand", type: "large_airport", scheduledService: true },
+  { code: "DMK", name: "Don Mueang International Airport", cityName: "Bangkok", countryCode: "TH", countryName: "Thailand", type: "large_airport", scheduledService: true },
+  { code: "SIN", name: "Singapore Changi Airport", cityName: "Singapore", countryCode: "SG", countryName: "Singapore", type: "large_airport", scheduledService: true },
+  { code: "FCO", name: "Leonardo da Vinci–Fiumicino Airport", cityName: "Rome", countryCode: "IT", countryName: "Italy", type: "large_airport", scheduledService: true },
+  { code: "CIA", name: "Ciampino–G. B. Pastine International Airport", cityName: "Rome", countryCode: "IT", countryName: "Italy", type: "medium_airport", scheduledService: true },
+  { code: "CAI", name: "Cairo International Airport", cityName: "Cairo", countryCode: "EG", countryName: "Egypt", type: "large_airport", scheduledService: true },
+  { code: "SPX", name: "Sphinx International Airport", cityName: "Cairo", countryCode: "EG", countryName: "Egypt", type: "medium_airport", scheduledService: true },
+  { code: "SFO", name: "San Francisco International Airport", cityName: "San Francisco", countryCode: "US", countryName: "United States", type: "large_airport", scheduledService: true },
+  { code: "JFK", name: "John F. Kennedy International Airport", cityName: "New York", countryCode: "US", countryName: "United States", type: "large_airport", scheduledService: true },
+  { code: "EWR", name: "Newark Liberty International Airport", cityName: "New York", countryCode: "US", countryName: "United States", type: "large_airport", scheduledService: true },
+  { code: "LGA", name: "LaGuardia Airport", cityName: "New York", countryCode: "US", countryName: "United States", type: "large_airport", scheduledService: true },
+  { code: "LHR", name: "Heathrow Airport", cityName: "London", countryCode: "GB", countryName: "United Kingdom", type: "large_airport", scheduledService: true },
+  { code: "LGW", name: "Gatwick Airport", cityName: "London", countryCode: "GB", countryName: "United Kingdom", type: "large_airport", scheduledService: true },
+  { code: "CDG", name: "Charles de Gaulle Airport", cityName: "Paris", countryCode: "FR", countryName: "France", type: "large_airport", scheduledService: true },
+  { code: "ORY", name: "Paris Orly Airport", cityName: "Paris", countryCode: "FR", countryName: "France", type: "large_airport", scheduledService: true },
+  { code: "HKG", name: "Hong Kong International Airport", cityName: "Hong Kong", countryCode: "HK", countryName: "Hong Kong", type: "large_airport", scheduledService: true }
+];
+
 export type AirportMasterRecord = {
   code: string;
   name: string;
@@ -165,10 +196,19 @@ function scoreAirportRecord(record: AirportMasterRecord, query: string) {
 }
 
 async function loadAirportMaster() {
-  const raw = await readFile(AIRPORTS_CSV_PATH, "utf8");
+  let raw = "";
+  try {
+    raw = await readFile(AIRPORTS_CSV_PATH, "utf8");
+  } catch (error) {
+    console.error("airport_master_csv_unavailable", {
+      path: AIRPORTS_CSV_PATH,
+      code: error instanceof Error && "code" in error ? (error as { code?: string }).code : undefined
+    });
+    return FALLBACK_AIRPORT_MASTER;
+  }
   const lines = raw.split(/\r?\n/).filter(Boolean);
   if (lines.length <= 1) {
-    return [] as AirportMasterRecord[];
+    return FALLBACK_AIRPORT_MASTER;
   }
 
   const header = parseCsvLine(lines[0]);
@@ -220,7 +260,8 @@ async function loadAirportMaster() {
       deduped.set(record.code, record);
     }
   }
-  return Array.from(deduped.values());
+  const parsed = Array.from(deduped.values());
+  return parsed.length > 0 ? parsed : FALLBACK_AIRPORT_MASTER;
 }
 
 export async function getAirportMaster() {
